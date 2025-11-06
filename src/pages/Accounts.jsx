@@ -1,12 +1,24 @@
 import { useState, useEffect } from 'react'
-import { Tabs, Table, DatePicker, Space, Button } from 'antd'
-import { message } from 'antd'
+import { 
+  Tabs, 
+  Table, 
+  DatePicker, 
+  Space, 
+  Button, 
+  message 
+} from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
 import { getReceivables, getUnpaidPayables, getPaidPayables, getServiceExpenses } from '../services/api'
 
 const { RangePicker } = DatePicker
+
+// 確保 message 在生產環境構建時不被移除（明確引用）
+if (process.env.NODE_ENV === 'production') {
+  // 強制引用 message，防止 tree-shaking
+  void message
+}
 
 function Accounts() {
   const [dateRange, setDateRange] = useState([dayjs().subtract(1, 'month'), dayjs()])
@@ -90,7 +102,7 @@ function Accounts() {
     }
 
     try {
-      message.loading('正在匯出 Excel...', 0)
+      const hideLoading = message.loading('正在匯出 Excel...', 0)
       
       const fromDate = dateRange[0].format('YYYY-MM-DD')
       const toDate = dateRange[1].format('YYYY-MM-DD')
@@ -197,7 +209,7 @@ function Accounts() {
                      serviceSheet.length > 0
       
       if (!hasData) {
-        message.destroy()
+        hideLoading()
         message.warning('選定的日期範圍內沒有資料可匯出')
         return
       }
@@ -207,10 +219,10 @@ function Accounts() {
         const fileName = `帳款資料_${fromDate}_${toDate}.xlsx`
         XLSX.writeFile(wb, fileName)
         
-        message.destroy()
+        hideLoading()
         message.success('匯出成功！')
       } catch (writeError) {
-        message.destroy()
+        hideLoading()
         console.error('XLSX.writeFile 錯誤', writeError)
         // 如果 writeFile 失敗，嘗試使用 Blob 方式
         try {
@@ -225,16 +237,13 @@ function Accounts() {
           document.body.removeChild(link)
           URL.revokeObjectURL(url)
           
-          message.destroy()
           message.success('匯出成功！')
         } catch (blobError) {
-          message.destroy()
           message.error('匯出失敗：' + (blobError.message || '無法建立檔案'))
           console.error('Blob 匯出錯誤', blobError)
         }
       }
     } catch (error) {
-      message.destroy()
       const errorMsg = error?.message || error?.toString() || '未知錯誤'
       message.error('匯出失敗：' + errorMsg)
       console.error('匯出錯誤', error)

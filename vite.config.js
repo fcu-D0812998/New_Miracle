@@ -9,13 +9,6 @@ export default defineConfig({
   build: {
     commonjsOptions: {
       include: [/xlsx/, /node_modules/]
-    },
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          'antd': ['antd']
-        }
-      }
     }
   }
 })
