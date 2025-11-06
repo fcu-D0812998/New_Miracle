@@ -14,12 +14,6 @@ import { getReceivables, getUnpaidPayables, getPaidPayables, getServiceExpenses 
 
 const { RangePicker } = DatePicker
 
-// 確保 message 在生產環境構建時不被移除（明確引用）
-if (process.env.NODE_ENV === 'production') {
-  // 強制引用 message，防止 tree-shaking
-  void message
-}
-
 function Accounts() {
   const [dateRange, setDateRange] = useState([dayjs().subtract(1, 'month'), dayjs()])
   const [receivablesData, setReceivablesData] = useState([])
@@ -27,6 +21,7 @@ function Accounts() {
   const [paidPayableData, setPaidPayableData] = useState([])
   const [serviceExpenseData, setServiceExpenseData] = useState([])
   const [loading, setLoading] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   const loadData = async () => {
     if (!dateRange || !dateRange[0] || !dateRange[1]) return
@@ -101,9 +96,8 @@ function Accounts() {
       return
     }
 
+    setExporting(true)
     try {
-      const hideLoading = message.loading('正在匯出 Excel...', 0)
-      
       const fromDate = dateRange[0].format('YYYY-MM-DD')
       const toDate = dateRange[1].format('YYYY-MM-DD')
       
@@ -209,8 +203,8 @@ function Accounts() {
                      serviceSheet.length > 0
       
       if (!hasData) {
-        hideLoading()
         message.warning('選定的日期範圍內沒有資料可匯出')
+        setExporting(false)
         return
       }
 
@@ -219,10 +213,8 @@ function Accounts() {
         const fileName = `帳款資料_${fromDate}_${toDate}.xlsx`
         XLSX.writeFile(wb, fileName)
         
-        hideLoading()
         message.success('匯出成功！')
       } catch (writeError) {
-        hideLoading()
         console.error('XLSX.writeFile 錯誤', writeError)
         // 如果 writeFile 失敗，嘗試使用 Blob 方式
         try {
@@ -247,6 +239,8 @@ function Accounts() {
       const errorMsg = error?.message || error?.toString() || '未知錯誤'
       message.error('匯出失敗：' + errorMsg)
       console.error('匯出錯誤', error)
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -258,7 +252,12 @@ function Accounts() {
           onChange={setDateRange}
           format="YYYY-MM-DD"
         />
-        <Button type="primary" icon={<DownloadOutlined />} onClick={handleExport}>
+        <Button 
+          type="primary" 
+          icon={<DownloadOutlined />} 
+          onClick={handleExport}
+          loading={exporting}
+        >
           匯出 Excel
         </Button>
       </Space>
