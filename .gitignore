@@ -1,0 +1,17 @@
+node_modules
+dist
+.DS_Store
+*.log
+.env.local
+.env.*.local
+
+# Environment variables (contain sensitive data)
+.env
+backend/.env
+**/.env
+# But keep example files
+!.env.example
+!backend/.env.example
+
+
+
