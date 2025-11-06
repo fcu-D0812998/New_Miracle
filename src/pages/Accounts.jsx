@@ -5,7 +5,7 @@ import {
   DatePicker, 
   Space, 
   Button, 
-  message 
+  Alert 
 } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -22,6 +22,8 @@ function Accounts() {
   const [serviceExpenseData, setServiceExpenseData] = useState([])
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [alertMessage, setAlertMessage] = useState(null)
+  const [alertType, setAlertType] = useState('info')
 
   const loadData = async () => {
     if (!dateRange || !dateRange[0] || !dateRange[1]) return
@@ -92,7 +94,9 @@ function Accounts() {
 
   const handleExport = async () => {
     if (!dateRange || !dateRange[0] || !dateRange[1]) {
-      message.warning('請先選擇日期範圍')
+      setAlertType('warning')
+      setAlertMessage('請先選擇日期範圍')
+      setTimeout(() => setAlertMessage(null), 3000)
       return
     }
 
@@ -203,7 +207,9 @@ function Accounts() {
                      serviceSheet.length > 0
       
       if (!hasData) {
-        message.warning('選定的日期範圍內沒有資料可匯出')
+        setAlertType('warning')
+        setAlertMessage('選定的日期範圍內沒有資料可匯出')
+        setTimeout(() => setAlertMessage(null), 3000)
         setExporting(false)
         return
       }
@@ -213,7 +219,9 @@ function Accounts() {
         const fileName = `帳款資料_${fromDate}_${toDate}.xlsx`
         XLSX.writeFile(wb, fileName)
         
-        message.success('匯出成功！')
+        setAlertType('success')
+        setAlertMessage('匯出成功！')
+        setTimeout(() => setAlertMessage(null), 3000)
       } catch (writeError) {
         console.error('XLSX.writeFile 錯誤', writeError)
         // 如果 writeFile 失敗，嘗試使用 Blob 方式
@@ -229,15 +237,21 @@ function Accounts() {
           document.body.removeChild(link)
           URL.revokeObjectURL(url)
           
-          message.success('匯出成功！')
+          setAlertType('success')
+          setAlertMessage('匯出成功！')
+          setTimeout(() => setAlertMessage(null), 3000)
         } catch (blobError) {
-          message.error('匯出失敗：' + (blobError.message || '無法建立檔案'))
+          setAlertType('error')
+          setAlertMessage('匯出失敗：' + (blobError.message || '無法建立檔案'))
+          setTimeout(() => setAlertMessage(null), 5000)
           console.error('Blob 匯出錯誤', blobError)
         }
       }
     } catch (error) {
       const errorMsg = error?.message || error?.toString() || '未知錯誤'
-      message.error('匯出失敗：' + errorMsg)
+      setAlertType('error')
+      setAlertMessage('匯出失敗：' + errorMsg)
+      setTimeout(() => setAlertMessage(null), 5000)
       console.error('匯出錯誤', error)
     } finally {
       setExporting(false)
@@ -246,6 +260,15 @@ function Accounts() {
 
   return (
     <div style={{ padding: 24 }}>
+      {alertMessage && (
+        <Alert
+          message={alertMessage}
+          type={alertType}
+          closable
+          onClose={() => setAlertMessage(null)}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <RangePicker
           value={dateRange}
