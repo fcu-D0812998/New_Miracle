@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Tabs, Table, DatePicker, Space, Button } from 'antd'
+import { Tabs, Table, DatePicker, Space, Button, message } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import * as XLSX from 'xlsx'
 import { getReceivables, getUnpaidPayables, getPaidPayables, getServiceExpenses } from '../services/api'
 
 const { RangePicker } = DatePicker
@@ -81,8 +82,124 @@ function Accounts() {
     { title: '繳費狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120 }
   ]
 
-  const handleExport = () => {
-    message.info('匯出功能待實作')
+  const handleExport = async () => {
+    if (!dateRange || !dateRange[0] || !dateRange[1]) {
+      message.warning('請先選擇日期範圍')
+      return
+    }
+
+    try {
+      message.loading('正在匯出 Excel...', 0)
+      
+      const fromDate = dateRange[0].format('YYYY-MM-DD')
+      const toDate = dateRange[1].format('YYYY-MM-DD')
+      
+      // 取得所有資料
+      const [receivables, unpaid, paid, service] = await Promise.all([
+        getReceivables(fromDate, toDate).catch(() => []),
+        getUnpaidPayables(fromDate, toDate).catch(() => []),
+        getPaidPayables(fromDate, toDate).catch(() => []),
+        getServiceExpenses(fromDate, toDate).catch(() => [])
+      ])
+
+      // 準備應收帳款資料
+      const receivablesSheet = receivables.map(item => ({
+        '類型': item.type || '',
+        '合約編號': item.contract_code || '',
+        '客戶代碼': item.customer_code || '',
+        '客戶名稱': item.customer_name || '',
+        '日期': item.date || '',
+        '結束日期': item.end_date || '',
+        '金額': item.amount || 0,
+        '手續費': item.fee || 0,
+        '已收金額': item.received_amount || 0,
+        '應收總額': (item.amount || 0) + (item.fee || 0),
+        '未收金額': ((item.amount || 0) + (item.fee || 0)) - (item.received_amount || 0),
+        '繳費狀況': item.payment_status || ''
+      }))
+
+      // 總未收帳款（篩選未收款）
+      const unpaidReceivablesSheet = receivablesSheet.filter(item => item.繳費狀況 !== '已收款')
+
+      // 準備未出帳款資料
+      const unpaidPayablesSheet = unpaid.map(item => ({
+        '合約編號': item.contract_code || '',
+        '類型': item.contract_type || '',
+        '客戶代碼': item.customer_code || '',
+        '客戶名稱': item.customer_name || '',
+        '日期': item.date || '',
+        '付款對象': item.payable_type || '',
+        '公司代碼': item.company_code || '',
+        '金額': item.amount || 0,
+        '付款狀況': item.payment_status || ''
+      }))
+
+      // 準備已出帳款資料
+      const paidPayablesSheet = paid.map(item => ({
+        '合約編號': item.contract_code || '',
+        '類型': item.contract_type || '',
+        '客戶代碼': item.customer_code || '',
+        '客戶名稱': item.customer_name || '',
+        '日期': item.date || '',
+        '付款對象': item.payable_type || '',
+        '公司代碼': item.company_code || '',
+        '金額': item.amount || 0,
+        '付款狀況': item.payment_status || ''
+      }))
+
+      // 準備服務費用資料
+      const serviceSheet = service.map(item => ({
+        '合約編號': item.contract_code || '',
+        '客戶代碼': item.customer_code || '',
+        '客戶名稱': item.customer_name || '',
+        '服務日期': item.service_date || '',
+        '確認日期': item.confirm_date || '',
+        '服務類型': item.service_type || '',
+        '維修公司代碼': item.repair_company_code || '',
+        '總金額': item.total_amount || 0,
+        '繳費狀況': item.payment_status || ''
+      }))
+
+      // 建立 Excel 工作簿
+      const wb = XLSX.utils.book_new()
+      
+      // 建立工作表
+      if (receivablesSheet.length > 0) {
+        const ws1 = XLSX.utils.json_to_sheet(receivablesSheet)
+        XLSX.utils.book_append_sheet(wb, ws1, '總應收帳款')
+      }
+      
+      if (unpaidReceivablesSheet.length > 0) {
+        const ws2 = XLSX.utils.json_to_sheet(unpaidReceivablesSheet)
+        XLSX.utils.book_append_sheet(wb, ws2, '總未收帳款')
+      }
+      
+      if (unpaidPayablesSheet.length > 0) {
+        const ws3 = XLSX.utils.json_to_sheet(unpaidPayablesSheet)
+        XLSX.utils.book_append_sheet(wb, ws3, '未出帳款')
+      }
+      
+      if (paidPayablesSheet.length > 0) {
+        const ws4 = XLSX.utils.json_to_sheet(paidPayablesSheet)
+        XLSX.utils.book_append_sheet(wb, ws4, '已出帳款')
+      }
+      
+      if (serviceSheet.length > 0) {
+        const ws5 = XLSX.utils.json_to_sheet(serviceSheet)
+        XLSX.utils.book_append_sheet(wb, ws5, '服務費用')
+      }
+
+      // 匯出檔案
+      const fileName = `帳款資料_${fromDate}_${toDate}.xlsx`
+      XLSX.writeFile(wb, fileName)
+      
+      message.destroy()
+      message.success('匯出成功！')
+    } catch (error) {
+      message.destroy()
+      message.error('匯出失敗：' + (error.message || '未知錯誤'))
+      console.error('匯出錯誤', error)
+    }
   }
 
   return (
