@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Tabs, Table, DatePicker, Space, Button, message } from 'antd'
+import { Tabs, Table, DatePicker, Space, Button } from 'antd'
+import { message } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
@@ -189,15 +190,53 @@ function Accounts() {
         XLSX.utils.book_append_sheet(wb, ws5, '服務費用')
       }
 
-      // 匯出檔案
-      const fileName = `帳款資料_${fromDate}_${toDate}.xlsx`
-      XLSX.writeFile(wb, fileName)
+      // 檢查是否有資料
+      const hasData = receivablesSheet.length > 0 || 
+                     unpaidPayablesSheet.length > 0 || 
+                     paidPayablesSheet.length > 0 || 
+                     serviceSheet.length > 0
       
-      message.destroy()
-      message.success('匯出成功！')
+      if (!hasData) {
+        message.destroy()
+        message.warning('選定的日期範圍內沒有資料可匯出')
+        return
+      }
+
+      // 匯出檔案
+      try {
+        const fileName = `帳款資料_${fromDate}_${toDate}.xlsx`
+        XLSX.writeFile(wb, fileName)
+        
+        message.destroy()
+        message.success('匯出成功！')
+      } catch (writeError) {
+        message.destroy()
+        console.error('XLSX.writeFile 錯誤', writeError)
+        // 如果 writeFile 失敗，嘗試使用 Blob 方式
+        try {
+          const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+          const blob = new Blob([wbout], { type: 'application/octet-stream' })
+          const url = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          link.href = url
+          link.download = `帳款資料_${fromDate}_${toDate}.xlsx`
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          URL.revokeObjectURL(url)
+          
+          message.destroy()
+          message.success('匯出成功！')
+        } catch (blobError) {
+          message.destroy()
+          message.error('匯出失敗：' + (blobError.message || '無法建立檔案'))
+          console.error('Blob 匯出錯誤', blobError)
+        }
+      }
     } catch (error) {
       message.destroy()
-      message.error('匯出失敗：' + (error.message || '未知錯誤'))
+      const errorMsg = error?.message || error?.toString() || '未知錯誤'
+      message.error('匯出失敗：' + errorMsg)
       console.error('匯出錯誤', error)
     }
   }
