@@ -10,7 +10,7 @@ import {
   Popconfirm 
 } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons'
-import { getCustomers, createCustomer, updateCustomer, deleteCustomer } from '../services/api'
+import { getCustomers, createCustomer, updateCustomer, deleteCustomer, changeCustomerCode } from '../services/api'
 
 const { TextArea } = Input
 
@@ -102,13 +102,22 @@ function Customers() {
     try {
       const values = await form.validateFields()
       if (editingRecord) {
-        await updateCustomer(editingRecord.customer_code, values)
+        const originalCode = editingRecord.customer_code
+        const { customer_code: newCode, ...rest } = values
+
+        if (newCode !== originalCode) {
+          await changeCustomerCode(originalCode, newCode)
+          await updateCustomer(newCode, rest)
+        } else {
+          await updateCustomer(originalCode, rest)
+        }
         message.success('更新成功')
       } else {
         await createCustomer(values)
         message.success('新增成功')
       }
       setIsModalOpen(false)
+      setEditingRecord(null)
       form.resetFields()
       loadData()
     } catch (error) {
@@ -164,7 +173,7 @@ function Customers() {
             name="customer_code"
             rules={[{ required: true, message: '請輸入客戶代碼' }]}
           >
-            <Input disabled={!!editingRecord} />
+            <Input />
           </Form.Item>
           
           <Form.Item

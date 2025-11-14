@@ -17,6 +17,7 @@ class ContractLeasingBase(BaseModel):
     sales_amount: Optional[float] = None
     service_company_code: Optional[str] = None
     service_amount: Optional[float] = None
+    needs_invoice: bool = False
 
 class ContractBuyoutBase(BaseModel):
     contract_code: str
@@ -27,6 +28,7 @@ class ContractBuyoutBase(BaseModel):
     sales_amount: Optional[float] = None
     service_company_code: Optional[str] = None
     service_amount: Optional[float] = None
+    needs_invoice: bool = False
 
 class ContractLeasingCreate(ContractLeasingBase):
     pass
@@ -39,6 +41,8 @@ class ContractLeasing(ContractLeasingBase):
     customer_name: Optional[str] = None
     sales_payment_status: str = "未付款"
     service_payment_status: str = "未付款"
+    status: str = "active"
+    needs_invoice: bool = False
     created_at: datetime
     updated_at: datetime
     
@@ -50,10 +54,16 @@ class ContractBuyout(ContractBuyoutBase):
     customer_name: Optional[str] = None
     sales_payment_status: str = "未付款"
     service_payment_status: str = "未付款"
+    status: str = "active"
+    needs_invoice: bool = False
     created_at: datetime
     updated_at: datetime
     
     class Config:
         from_attributes = True
+
+
+class ContractResume(BaseModel):
+    resume_date: Optional[date] = None
 
 

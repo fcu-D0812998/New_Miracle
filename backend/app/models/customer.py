@@ -38,3 +38,7 @@ class Customer(CustomerBase):
         from_attributes = True
 
 
+class CustomerCodeChange(BaseModel):
+    new_customer_code: str
+
+

@@ -26,6 +26,9 @@ export const updateCustomer = (customerCode, data) =>
 export const deleteCustomer = (customerCode) => 
   api.delete(`/customers/${customerCode}`)
 
+export const changeCustomerCode = (customerCode, newCode) =>
+  api.post(`/customers/${customerCode}/change-code`, { new_customer_code: newCode }).then(res => res.data)
+
 // 公司資料
 export const getCompanies = (type, search) => 
   api.get('/companies', { params: { type, search } }).then(res => res.data)
@@ -67,18 +70,30 @@ export const deleteLeasingContract = (contractCode) =>
 export const deleteBuyoutContract = (contractCode) => 
   api.delete(`/contracts/buyout/${contractCode}`)
 
+export const pauseLeasingContract = (contractCode) =>
+  api.post(`/contracts/leasing/${contractCode}/pause`).then(res => res.data)
+
+export const resumeLeasingContract = (contractCode, data = {}) =>
+  api.post(`/contracts/leasing/${contractCode}/resume`, data).then(res => res.data)
+
+export const pauseBuyoutContract = (contractCode) =>
+  api.post(`/contracts/buyout/${contractCode}/pause`).then(res => res.data)
+
+export const resumeBuyoutContract = (contractCode, data = {}) =>
+  api.post(`/contracts/buyout/${contractCode}/resume`, data).then(res => res.data)
+
 // 帳款資料
-export const getReceivables = (fromDate, toDate) => 
-  api.get('/accounts/receivables', { params: { from_date: fromDate, to_date: toDate } }).then(res => res.data)
+export const getReceivables = (filters = {}) => 
+  api.get('/accounts/receivables', { params: filters }).then(res => res.data)
 
-export const getUnpaidPayables = (fromDate, toDate) => 
-  api.get('/accounts/payables/unpaid', { params: { from_date: fromDate, to_date: toDate } }).then(res => res.data)
+export const getUnpaidPayables = (filters = {}) => 
+  api.get('/accounts/payables/unpaid', { params: filters }).then(res => res.data)
 
-export const getPaidPayables = (fromDate, toDate) => 
-  api.get('/accounts/payables/paid', { params: { from_date: fromDate, to_date: toDate } }).then(res => res.data)
+export const getPaidPayables = (filters = {}) => 
+  api.get('/accounts/payables/paid', { params: filters }).then(res => res.data)
 
-export const getServiceExpenses = (fromDate, toDate) => 
-  api.get('/accounts/service', { params: { from_date: fromDate, to_date: toDate } }).then(res => res.data)
+export const getServiceExpenses = (filters = {}) => 
+  api.get('/accounts/service', { params: filters }).then(res => res.data)
 
 // 銀行帳本
 export const getBankLedger = (fromDate, toDate, search) => 

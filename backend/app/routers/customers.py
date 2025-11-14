@@ -1,10 +1,31 @@
 """客戶資料 API - 簡潔直接，不要廢話"""
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
-from app.database import get_cursor
-from app.models.customer import Customer, CustomerCreate, CustomerUpdate
+from app.database import get_cursor, get_connection
+from app.models.customer import Customer, CustomerCreate, CustomerUpdate, CustomerCodeChange
 
 router = APIRouter()
+
+def _row_to_customer(row) -> Customer:
+    return Customer(
+        id=row[0], customer_code=row[1], name=row[2], contact_name=row[3],
+        mobile=row[4], phone=row[5], address=row[6], email=row[7],
+        tax_id=row[8], sales_rep_name=row[9], remark=row[10],
+        created_at=row[11], updated_at=row[12]
+    )
+
+def _fetch_customer(cur, customer_code: str, for_update: bool = False):
+    sql = """
+        SELECT id, customer_code, name, contact_name, mobile, phone,
+               address, email, tax_id, sales_rep_name, remark,
+               created_at, updated_at
+        FROM customers
+        WHERE customer_code = %s
+    """
+    if for_update:
+        sql += " FOR UPDATE"
+    cur.execute(sql, (customer_code,))
+    return cur.fetchone()
 
 @router.get("", response_model=List[Customer])
 def get_customers(search: Optional[str] = Query(None, description="搜尋關鍵字")):
@@ -31,37 +52,18 @@ def get_customers(search: Optional[str] = Query(None, description="搜尋關鍵�
             """)
         rows = cur.fetchall()
     
-    return [
-        Customer(
-            id=r[0], customer_code=r[1], name=r[2], contact_name=r[3],
-            mobile=r[4], phone=r[5], address=r[6], email=r[7],
-            tax_id=r[8], sales_rep_name=r[9], remark=r[10],
-            created_at=r[11], updated_at=r[12]
-        ) for r in rows
-    ]
+    return [_row_to_customer(r) for r in rows]
 
 @router.get("/{customer_code}", response_model=Customer)
 def get_customer(customer_code: str):
     """取得單一客戶"""
     with get_cursor() as cur:
-        cur.execute("""
-            SELECT id, customer_code, name, contact_name, mobile, phone,
-                   address, email, tax_id, sales_rep_name, remark,
-                   created_at, updated_at
-            FROM customers
-            WHERE customer_code = %s
-        """, (customer_code,))
-        row = cur.fetchone()
+        row = _fetch_customer(cur, customer_code)
     
     if not row:
         raise HTTPException(status_code=404, detail="客戶不存在")
     
-    return Customer(
-        id=row[0], customer_code=row[1], name=row[2], contact_name=row[3],
-        mobile=row[4], phone=row[5], address=row[6], email=row[7],
-        tax_id=row[8], sales_rep_name=row[9], remark=row[10],
-        created_at=row[11], updated_at=row[12]
-    )
+    return _row_to_customer(row)
 
 @router.post("", response_model=Customer, status_code=201)
 def create_customer(customer: CustomerCreate):
@@ -73,7 +75,7 @@ def create_customer(customer: CustomerCreate):
                 (customer_code, name, contact_name, mobile, phone, address,
                  email, tax_id, sales_rep_name, remark)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id, created_at, updated_at
+                RETURNING id
             """, (
                 customer.customer_code, customer.name, customer.contact_name,
                 customer.mobile, customer.phone, customer.address,
@@ -81,14 +83,8 @@ def create_customer(customer: CustomerCreate):
                 customer.remark
             ))
             row = cur.fetchone()
-            return Customer(
-                id=row[0], customer_code=customer.customer_code,
-                name=customer.name, contact_name=customer.contact_name,
-                mobile=customer.mobile, phone=customer.phone,
-                address=customer.address, email=customer.email,
-                tax_id=customer.tax_id, sales_rep_name=customer.sales_rep_name,
-                remark=customer.remark, created_at=row[1], updated_at=row[2]
-            )
+            full_row = _fetch_customer(cur, customer.customer_code)
+            return _row_to_customer(full_row)
         except Exception as e:
             if "unique" in str(e).lower():
                 raise HTTPException(status_code=400, detail="客戶代碼已存在")
@@ -105,7 +101,7 @@ def update_customer(customer_code: str, customer: CustomerUpdate):
                 sales_rep_name = %s, remark = %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE customer_code = %s
-            RETURNING id, created_at, updated_at
+            RETURNING id
         """, (
             customer.name, customer.contact_name, customer.mobile,
             customer.phone, customer.address, customer.email,
@@ -117,14 +113,67 @@ def update_customer(customer_code: str, customer: CustomerUpdate):
     if not row:
         raise HTTPException(status_code=404, detail="客戶不存在")
     
-    return Customer(
-        id=row[0], customer_code=customer_code, name=customer.name,
-        contact_name=customer.contact_name, mobile=customer.mobile,
-        phone=customer.phone, address=customer.address,
-        email=customer.email, tax_id=customer.tax_id,
-        sales_rep_name=customer.sales_rep_name, remark=customer.remark,
-        created_at=row[1], updated_at=row[2]
-    )
+    with get_cursor() as cur:
+        refreshed = _fetch_customer(cur, customer_code)
+    
+    if not refreshed:
+        raise HTTPException(status_code=500, detail="客戶讀取失敗")
+    
+    return _row_to_customer(refreshed)
+
+
+@router.post("/{customer_code}/change-code", response_model=Customer)
+def change_customer_code(customer_code: str, payload: CustomerCodeChange):
+    """更換客戶代碼並同步所有關聯資料"""
+    new_code = payload.new_customer_code.strip()
+    if not new_code:
+        raise HTTPException(status_code=400, detail="新客戶代碼不得為空")
+    if new_code == customer_code:
+        return get_customer(customer_code)
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            current = _fetch_customer(cur, customer_code, for_update=True)
+            if not current:
+                raise HTTPException(status_code=404, detail="客戶不存在")
+
+            cur.execute(
+                "SELECT 1 FROM customers WHERE customer_code = %s",
+                (new_code,)
+            )
+            if cur.fetchone():
+                raise HTTPException(status_code=400, detail="新客戶代碼已存在")
+
+            for sql in (
+                "UPDATE contracts_leasing SET customer_code = %s WHERE customer_code = %s",
+                "UPDATE contracts_buyout SET customer_code = %s WHERE customer_code = %s",
+                "UPDATE ar_leasing SET customer_code = %s WHERE customer_code = %s",
+                "UPDATE ar_buyout SET customer_code = %s WHERE customer_code = %s",
+                "UPDATE service_expense SET customer_code = %s WHERE customer_code = %s"
+            ):
+                cur.execute(sql, (new_code, customer_code))
+
+            cur.execute("""
+                UPDATE customers
+                SET customer_code = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE customer_code = %s
+            """, (new_code, customer_code))
+
+            conn.commit()
+
+            refreshed = _fetch_customer(cur, new_code)
+            if not refreshed:
+                raise HTTPException(status_code=500, detail="客戶讀取失敗")
+            return _row_to_customer(refreshed)
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
 
 @router.delete("/{customer_code}", status_code=204)
 def delete_customer(customer_code: str):

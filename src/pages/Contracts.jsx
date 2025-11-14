@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Tabs, Table, Button, Input, Space, Modal, Form, InputNumber, DatePicker, Select, message, Popconfirm } from 'antd'
+import { Tabs, Table, Button, Input, Space, Modal, Form, InputNumber, DatePicker, Select, message, Popconfirm, Tag, Switch } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { 
@@ -7,6 +7,8 @@ import {
   createLeasingContract, createBuyoutContract,
   updateLeasingContract, updateBuyoutContract,
   deleteLeasingContract, deleteBuyoutContract,
+  pauseLeasingContract, resumeLeasingContract,
+  pauseBuyoutContract, resumeBuyoutContract,
   getCustomers, getCompanies
 } from '../services/api'
 
@@ -74,8 +76,16 @@ function Contracts() {
     }
   }, [activeTab, searchText])
 
+  const renderStatusTag = (status) => {
+    if (status === 'paused') {
+      return <Tag color="volcano">暫停</Tag>
+    }
+    return <Tag color="green">使用中</Tag>
+  }
+
   const leasingColumns = [
     { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120 },
+    { title: '狀態', dataIndex: 'status', key: 'status', width: 90, render: renderStatusTag },
     { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120 },
     { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150 },
     { title: '起始日', dataIndex: 'start_date', key: 'start_date', width: 100 },
@@ -85,16 +95,26 @@ function Contracts() {
     { title: '繳費週期(月)', dataIndex: 'payment_cycle_months', key: 'payment_cycle_months', width: 120 },
     { title: '超印', dataIndex: 'overprint', key: 'overprint', width: 150 },
     { title: '合約期數(月)', dataIndex: 'contract_months', key: 'contract_months', width: 120 },
+    { title: '需開發票', dataIndex: 'needs_invoice', key: 'needs_invoice', width: 100, render: (val) => val ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
     { title: '業務金額', dataIndex: 'sales_amount', key: 'sales_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
     { title: '維護金額', dataIndex: 'service_amount', key: 'service_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
     {
       title: '操作',
       key: 'action',
-      width: 150,
+      width: 220,
       fixed: 'right',
       render: (_, record) => (
         <Space>
           <Button type="link" icon={<EditOutlined />} onClick={() => handleEdit(record, 'leasing')}>編輯</Button>
+          {record.status === 'active' ? (
+            <Popconfirm title="確定要暫停這份合約？" onConfirm={() => handlePause(record.contract_code, 'leasing')}>
+              <Button type="link" danger>暫停</Button>
+            </Popconfirm>
+          ) : (
+            <Popconfirm title="確定要恢復這份合約？" onConfirm={() => handleResume(record.contract_code, 'leasing')}>
+              <Button type="link">恢復</Button>
+            </Popconfirm>
+          )}
           <Popconfirm title="確定要刪除嗎？" onConfirm={() => handleDelete(record.contract_code, 'leasing')}>
             <Button type="link" danger icon={<DeleteOutlined />}>刪除</Button>
           </Popconfirm>
@@ -105,20 +125,31 @@ function Contracts() {
 
   const buyoutColumns = [
     { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120 },
+    { title: '狀態', dataIndex: 'status', key: 'status', width: 90, render: renderStatusTag },
     { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120 },
     { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150 },
     { title: '成交日期', dataIndex: 'deal_date', key: 'deal_date', width: 100 },
     { title: '成交金額', dataIndex: 'deal_amount', key: 'deal_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
+    { title: '需開發票', dataIndex: 'needs_invoice', key: 'needs_invoice', width: 100, render: (val) => val ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
     { title: '業務金額', dataIndex: 'sales_amount', key: 'sales_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
     { title: '維護金額', dataIndex: 'service_amount', key: 'service_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
     {
       title: '操作',
       key: 'action',
-      width: 150,
+      width: 220,
       fixed: 'right',
       render: (_, record) => (
         <Space>
           <Button type="link" icon={<EditOutlined />} onClick={() => handleEdit(record, 'buyout')}>編輯</Button>
+          {record.status === 'active' ? (
+            <Popconfirm title="確定要暫停這份合約？" onConfirm={() => handlePause(record.contract_code, 'buyout')}>
+              <Button type="link" danger>暫停</Button>
+            </Popconfirm>
+          ) : (
+            <Popconfirm title="確定要恢復這份合約？" onConfirm={() => handleResume(record.contract_code, 'buyout')}>
+              <Button type="link">恢復</Button>
+            </Popconfirm>
+          )}
           <Popconfirm title="確定要刪除嗎？" onConfirm={() => handleDelete(record.contract_code, 'buyout')}>
             <Button type="link" danger icon={<DeleteOutlined />}>刪除</Button>
           </Popconfirm>
@@ -136,8 +167,8 @@ function Contracts() {
   const handleEdit = (record, type) => {
     setEditingRecord({ ...record, type })
     const formValues = type === 'leasing' 
-      ? { ...record, start_date: dayjs(record.start_date) }
-      : { ...record, deal_date: dayjs(record.deal_date) }
+      ? { ...record, start_date: dayjs(record.start_date), needs_invoice: record.needs_invoice ?? false }
+      : { ...record, deal_date: dayjs(record.deal_date), needs_invoice: record.needs_invoice ?? false }
     form.setFieldsValue(formValues)
     setIsModalOpen(true)
   }
@@ -154,6 +185,45 @@ function Contracts() {
       message.success('刪除成功')
     } catch (error) {
       message.error('刪除失敗：' + (error.response?.data?.detail || error.message))
+    }
+  }
+
+  const handlePause = async (contractCode, type) => {
+    setLoading(true)
+    try {
+      if (type === 'leasing') {
+        await pauseLeasingContract(contractCode)
+        message.success('合約已暫停，應收帳款已取消')
+        await loadLeasingData()
+      } else {
+        await pauseBuyoutContract(contractCode)
+        message.success('合約已暫停，應收帳款已取消')
+        await loadBuyoutData()
+      }
+    } catch (error) {
+      message.error('暫停失敗：' + (error.response?.data?.detail || error.message))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleResume = async (contractCode, type) => {
+    setLoading(true)
+    const payload = { resume_date: dayjs().format('YYYY-MM-DD') }
+    try {
+      if (type === 'leasing') {
+        await resumeLeasingContract(contractCode, payload)
+        message.success('合約已恢復，未來應收帳款已重新生成')
+        await loadLeasingData()
+      } else {
+        await resumeBuyoutContract(contractCode, payload)
+        message.success('合約已恢復，未來應收帳款已重新生成')
+        await loadBuyoutData()
+      }
+    } catch (error) {
+      message.error('恢復失敗：' + (error.response?.data?.detail || error.message))
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -200,7 +270,7 @@ function Contracts() {
   const renderLeasingForm = () => (
     <>
       <Form.Item label="合約編號" name="contract_code" rules={[{ required: true }]}>
-        <Input disabled={!!editingRecord?.contract_code} />
+        <Input />
       </Form.Item>
       <Form.Item label="客戶名稱" name="customer_name" rules={[{ required: true }]}>
         <Select options={customers} />
@@ -227,6 +297,14 @@ function Contracts() {
           <InputNumber min={0} style={{ width: '100%' }} />
         </Form.Item>
       </Space.Compact>
+      <Form.Item 
+        label="是否需要開發票" 
+        name="needs_invoice" 
+        valuePropName="checked"
+        tooltip="勾選後，月租金將自動 × 1.05（含稅），金額會直接存入資料庫"
+      >
+        <Switch checkedChildren="要開" unCheckedChildren="不開" />
+      </Form.Item>
       <Form.Item label="超印描述" name="overprint">
         <Input />
       </Form.Item>
@@ -250,7 +328,7 @@ function Contracts() {
   const renderBuyoutForm = () => (
     <>
       <Form.Item label="合約編號" name="contract_code" rules={[{ required: true }]}>
-        <Input disabled={!!editingRecord?.contract_code} />
+        <Input />
       </Form.Item>
       <Form.Item label="客戶名稱" name="customer_name" rules={[{ required: true }]}>
         <Select options={customers} />
@@ -263,6 +341,14 @@ function Contracts() {
           <InputNumber min={0} step={100} style={{ width: '100%' }} />
         </Form.Item>
       </Space.Compact>
+      <Form.Item 
+        label="是否需要開發票" 
+        name="needs_invoice" 
+        valuePropName="checked"
+        tooltip="勾選後，成交金額將自動 × 1.05（含稅），金額會直接存入資料庫"
+      >
+        <Switch checkedChildren="要開" unCheckedChildren="不開" />
+      </Form.Item>
       <Space.Compact style={{ width: '100%' }}>
         <Form.Item label="業務公司" name="sales_company_code" style={{ flex: 1 }}>
           <Select options={salesCompanies} placeholder="不指定" allowClear />
