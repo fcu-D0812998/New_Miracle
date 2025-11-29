@@ -39,6 +39,16 @@ function Companies() {
     loadData()
   }, [searchText])
 
+  useEffect(() => {
+    if (isModalOpen) {
+      if (editingRecord) {
+        form.setFieldsValue(editingRecord)
+      } else {
+        form.resetFields()
+      }
+    }
+  }, [isModalOpen, editingRecord])
+
   const columns = [
     { title: '公司代碼', dataIndex: 'company_code', key: 'company_code', width: 120 },
     { title: '公司名稱', dataIndex: 'name', key: 'name', width: 150 },
@@ -98,8 +108,15 @@ function Companies() {
 
   const handleEdit = (record) => {
     setEditingRecord(record)
+    form.resetFields()
     form.setFieldsValue(record)
     setIsModalOpen(true)
+  }
+
+  const handleCancel = () => {
+    setIsModalOpen(false)
+    setEditingRecord(null)
+    form.resetFields()
   }
 
   const handleDelete = async (companyCode) => {
@@ -123,6 +140,7 @@ function Companies() {
         message.success('新增成功')
       }
       setIsModalOpen(false)
+      setEditingRecord(null)
       form.resetFields()
       loadData()
     } catch (error) {
@@ -160,18 +178,16 @@ function Companies() {
         title={editingRecord ? '編輯公司' : '新增公司'}
         open={isModalOpen}
         onOk={handleSubmit}
-        onCancel={() => {
-          setIsModalOpen(false)
-          form.resetFields()
-        }}
+        onCancel={handleCancel}
         width={800}
         okText="確定"
         cancelText="取消"
+        destroyOnClose
       >
         <Form
+          key={editingRecord ? editingRecord.id : 'new'}
           form={form}
           layout="vertical"
-          initialValues={editingRecord}
         >
           <Form.Item
             label="公司代碼"

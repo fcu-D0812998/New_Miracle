@@ -108,5 +108,18 @@ export const updateBankLedger = (id, data) =>
 export const deleteBankLedger = (id) => 
   api.delete(`/bank-ledger/${id}`)
 
+// 對帳相關
+export const getReconcilableReceivables = (search, type) => 
+  api.get('/bank-ledger/reconcilable/receivables', { params: { search, type } }).then(res => res.data)
+
+export const getReconcilableServiceExpenses = (search, service_type) => 
+  api.get('/bank-ledger/reconcilable/service-expenses', { params: { search, service_type } }).then(res => res.data)
+
+export const reconcileBankLedger = (id, data) => 
+  api.post(`/bank-ledger/${id}/reconcile`, data).then(res => res.data)
+
+export const unreconcileBankLedger = (id, revert = true) => 
+  api.post(`/bank-ledger/${id}/unreconcile?revert=${revert}`).then(res => res.data)
+
 export default api
 

@@ -38,6 +38,16 @@ function Customers() {
     loadData()
   }, [searchText])
 
+  useEffect(() => {
+    if (isModalOpen) {
+      if (editingRecord) {
+        form.setFieldsValue(editingRecord)
+      } else {
+        form.resetFields()
+      }
+    }
+  }, [isModalOpen, editingRecord])
+
   const columns = [
     { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120 },
     { title: '客戶名稱', dataIndex: 'name', key: 'name', width: 150 },
@@ -84,8 +94,15 @@ function Customers() {
 
   const handleEdit = (record) => {
     setEditingRecord(record)
+    form.resetFields()
     form.setFieldsValue(record)
     setIsModalOpen(true)
+  }
+
+  const handleCancel = () => {
+    setIsModalOpen(false)
+    setEditingRecord(null)
+    form.resetFields()
   }
 
   const handleDelete = async (customerCode) => {
@@ -155,25 +172,23 @@ function Customers() {
         title={editingRecord ? '編輯客戶' : '新增客戶'}
         open={isModalOpen}
         onOk={handleSubmit}
-        onCancel={() => {
-          setIsModalOpen(false)
-          form.resetFields()
-        }}
+        onCancel={handleCancel}
         width={800}
         okText="確定"
         cancelText="取消"
+        destroyOnClose
       >
         <Form
+          key={editingRecord ? editingRecord.id : 'new'}
           form={form}
           layout="vertical"
-          initialValues={editingRecord}
         >
           <Form.Item
             label="客戶代碼"
             name="customer_code"
             rules={[{ required: true, message: '請輸入客戶代碼' }]}
           >
-            <Input />
+            <Input disabled={false} />
           </Form.Item>
           
           <Form.Item

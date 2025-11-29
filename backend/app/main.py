@@ -8,7 +8,7 @@ app = FastAPI(title="印表機記帳平台 API", version="1.0.0")
 # CORS 設定（允許前端連接）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生產環境應該限制來源
+    allow_origins=["http://localhost:3000", "http://localhost:5173"],  # 明確指定前端來源
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

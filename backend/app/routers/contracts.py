@@ -8,7 +8,10 @@ from app.models.contract import (
     ContractLeasingCreate, ContractBuyoutCreate,
     ContractResume
 )
-from app.services.contract_service import generate_leasing_ar, generate_buyout_ar
+from app.services.contract_service import (
+    generate_leasing_ar, generate_buyout_ar,
+    generate_service_expenses_for_leasing, generate_service_expenses_for_buyout
+)
 
 router = APIRouter()
 
@@ -171,6 +174,14 @@ def create_leasing_contract(contract: ContractLeasingCreate):
                     contract.payment_cycle_months, contract.contract_months, conn
                 )
             
+            # 生成服務費用
+            generate_service_expenses_for_leasing(
+                contract.contract_code, contract.customer_code, customer_name,
+                contract.sales_company_code, contract.sales_amount,
+                contract.service_company_code, contract.service_amount,
+                conn
+            )
+            
             conn.commit()
             row = _fetch_leasing(cur, contract.contract_code)
             if not row:
@@ -214,6 +225,14 @@ def create_buyout_contract(contract: ContractBuyoutCreate):
                     contract.contract_code, contract.customer_code, customer_name,
                     contract.deal_date, deal_amount, conn
                 )
+            
+            # 生成服務費用
+            generate_service_expenses_for_buyout(
+                contract.contract_code, contract.customer_code, customer_name,
+                contract.sales_company_code, contract.sales_amount,
+                contract.service_company_code, contract.service_amount,
+                conn
+            )
             
             conn.commit()
             row = _fetch_buyout(cur, contract.contract_code)
@@ -293,6 +312,21 @@ def update_leasing_contract(contract_code: str, contract: ContractLeasingCreate)
                     (new_contract_code, contract_code)
                 )
             
+            # 更新服務費用（處理合約編號變更）
+            if code_changed:
+                cur.execute(
+                    "UPDATE service_expense SET contract_code = %s WHERE contract_code = %s",
+                    (new_contract_code, contract_code)
+                )
+            
+            # 生成/更新服務費用
+            generate_service_expenses_for_leasing(
+                new_contract_code, contract.customer_code, customer_name,
+                contract.sales_company_code, contract.sales_amount,
+                contract.service_company_code, contract.service_amount,
+                conn
+            )
+            
             conn.commit()
             refreshed = _fetch_leasing(cur, new_contract_code)
             if not refreshed:
@@ -365,6 +399,21 @@ def update_buyout_contract(contract_code: str, contract: ContractBuyoutCreate):
                     "UPDATE ar_buyout SET contract_code = %s WHERE contract_code = %s",
                     (new_contract_code, contract_code)
                 )
+            
+            # 更新服務費用（處理合約編號變更）
+            if code_changed:
+                cur.execute(
+                    "UPDATE service_expense SET contract_code = %s WHERE contract_code = %s",
+                    (new_contract_code, contract_code)
+                )
+            
+            # 生成/更新服務費用
+            generate_service_expenses_for_buyout(
+                new_contract_code, contract.customer_code, customer_name,
+                contract.sales_company_code, contract.sales_amount,
+                contract.service_company_code, contract.service_amount,
+                conn
+            )
             
             conn.commit()
             refreshed = _fetch_buyout(cur, new_contract_code)
@@ -542,11 +591,12 @@ def resume_buyout_contract(contract_code: str, payload: ContractResume):
 
 @router.delete("/leasing/{contract_code}", status_code=204)
 def delete_leasing_contract(contract_code: str):
-    """刪除租賃合約（連帶刪除應收帳款）"""
+    """刪除租賃合約（連帶刪除應收帳款和服務費用）"""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM ar_leasing WHERE contract_code = %s", (contract_code,))
+            cur.execute("DELETE FROM service_expense WHERE contract_code = %s", (contract_code,))
             cur.execute("DELETE FROM contracts_leasing WHERE contract_code = %s", (contract_code,))
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="合約不存在")
@@ -556,11 +606,12 @@ def delete_leasing_contract(contract_code: str):
 
 @router.delete("/buyout/{contract_code}", status_code=204)
 def delete_buyout_contract(contract_code: str):
-    """刪除買斷合約（連帶刪除應收帳款）"""
+    """刪除買斷合約（連帶刪除應收帳款和服務費用）"""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM ar_buyout WHERE contract_code = %s", (contract_code,))
+            cur.execute("DELETE FROM service_expense WHERE contract_code = %s", (contract_code,))
             cur.execute("DELETE FROM contracts_buyout WHERE contract_code = %s", (contract_code,))
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="合約不存在")

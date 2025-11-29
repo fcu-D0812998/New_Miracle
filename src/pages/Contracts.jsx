@@ -76,6 +76,32 @@ function Contracts() {
     }
   }, [activeTab, searchText])
 
+  useEffect(() => {
+    if (isModalOpen) {
+      if (editingRecord?.contract_code) {
+        // 編輯模式：設定表單值
+        if (editingRecord.type === 'leasing') {
+          const formValues = {
+            ...editingRecord,
+            start_date: editingRecord.start_date ? dayjs(editingRecord.start_date) : null,
+            needs_invoice: editingRecord.needs_invoice ?? false
+          }
+          form.setFieldsValue(formValues)
+        } else if (editingRecord.type === 'buyout') {
+          const formValues = {
+            ...editingRecord,
+            deal_date: editingRecord.deal_date ? dayjs(editingRecord.deal_date) : null,
+            needs_invoice: editingRecord.needs_invoice ?? false
+          }
+          form.setFieldsValue(formValues)
+        }
+      } else {
+        // 新增模式：重置表單
+        form.resetFields()
+      }
+    }
+  }, [isModalOpen, editingRecord])
+
   const renderStatusTag = (status) => {
     if (status === 'paused') {
       return <Tag color="volcano">暫停</Tag>
@@ -166,11 +192,18 @@ function Contracts() {
 
   const handleEdit = (record, type) => {
     setEditingRecord({ ...record, type })
+    form.resetFields()
     const formValues = type === 'leasing' 
       ? { ...record, start_date: dayjs(record.start_date), needs_invoice: record.needs_invoice ?? false }
       : { ...record, deal_date: dayjs(record.deal_date), needs_invoice: record.needs_invoice ?? false }
     form.setFieldsValue(formValues)
     setIsModalOpen(true)
+  }
+
+  const handleCancel = () => {
+    setIsModalOpen(false)
+    setEditingRecord(null)
+    form.resetFields()
   }
 
   const handleDelete = async (contractCode, type) => {
@@ -260,6 +293,7 @@ function Contracts() {
         }
       }
       setIsModalOpen(false)
+      setEditingRecord(null)
       form.resetFields()
     } catch (error) {
       if (error.errorFields) return
@@ -432,15 +466,17 @@ function Contracts() {
         title={editingRecord?.contract_code ? (editingRecord.type === 'leasing' ? '編輯租賃合約' : '編輯買斷合約') : (editingRecord?.type === 'leasing' ? '新增租賃合約' : '新增買斷合約')}
         open={isModalOpen}
         onOk={handleSubmit}
-        onCancel={() => {
-          setIsModalOpen(false)
-          form.resetFields()
-        }}
+        onCancel={handleCancel}
         width={900}
         okText="確定"
         cancelText="取消"
+        destroyOnClose
       >
-        <Form form={form} layout="vertical">
+        <Form 
+          key={editingRecord?.contract_code ? `${editingRecord.type}-${editingRecord.contract_code}` : `new-${editingRecord?.type || 'leasing'}`}
+          form={form} 
+          layout="vertical"
+        >
           {editingRecord?.type === 'leasing' ? renderLeasingForm() : renderBuyoutForm()}
         </Form>
       </Modal>

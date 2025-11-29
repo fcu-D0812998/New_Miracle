@@ -10,11 +10,22 @@ import {
   Input,
   Radio,
   message,
-  Popconfirm 
+  Popconfirm,
+  Select,
+  Tag
 } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, SearchOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, SearchOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { getBankLedger, createBankLedger, updateBankLedger, deleteBankLedger } from '../services/api'
+import { 
+  getBankLedger, 
+  createBankLedger, 
+  updateBankLedger, 
+  deleteBankLedger,
+  getReconcilableReceivables,
+  getReconcilableServiceExpenses,
+  reconcileBankLedger,
+  unreconcileBankLedger
+} from '../services/api'
 
 const { TextArea } = Input
 const { RangePicker } = DatePicker
@@ -23,10 +34,16 @@ function BankLedger() {
   const [searchText, setSearchText] = useState('')
   const [dateRange, setDateRange] = useState(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [isReconcileModalOpen, setIsReconcileModalOpen] = useState(false)
   const [editingRecord, setEditingRecord] = useState(null)
+  const [reconcilingRecord, setReconcilingRecord] = useState(null)
   const [dataSource, setDataSource] = useState([])
   const [loading, setLoading] = useState(false)
+  const [reconcileLoading, setReconcileLoading] = useState(false)
+  const [reconcilableReceivables, setReconcilableReceivables] = useState([])
+  const [reconcilableServiceExpenses, setReconcilableServiceExpenses] = useState([])
   const [form] = Form.useForm()
+  const [reconcileForm] = Form.useForm()
 
   const loadData = async () => {
     setLoading(true)
@@ -45,6 +62,22 @@ function BankLedger() {
   useEffect(() => {
     loadData()
   }, [dateRange, searchText])
+
+  useEffect(() => {
+    if (isModalOpen) {
+      if (editingRecord) {
+        const formValues = {
+          ...editingRecord,
+          txn_date: dayjs(editingRecord.txn_date),
+          transaction_type: editingRecord.income > 0 ? 'income' : 'expense',
+          amount: editingRecord.income > 0 ? editingRecord.income : editingRecord.expense
+        }
+        form.setFieldsValue(formValues)
+      } else {
+        form.resetFields()
+      }
+    }
+  }, [isModalOpen, editingRecord])
 
   const columns = [
     { title: '日期', dataIndex: 'txn_date', key: 'txn_date', width: 120 },
@@ -80,6 +113,9 @@ function BankLedger() {
         if (record.reconciled_ar_id) {
           return `應收帳款 #${record.reconciled_ar_id} (${record.reconciled_ar_type})`
         }
+        if (record.reconciled_service_expense_id) {
+          return `服務費用 #${record.reconciled_service_expense_id}`
+        }
         if (record.reconciled_payable_contract_code) {
           return `合約 ${record.reconciled_payable_contract_code} (${record.reconciled_payable_type})`
         }
@@ -89,10 +125,28 @@ function BankLedger() {
     {
       title: '操作',
       key: 'action',
-      width: 150,
+      width: 200,
       fixed: 'right',
       render: (_, record) => (
         <Space>
+          {!record.is_reconciled && (
+            <Button 
+              type="link" 
+              icon={<CheckCircleOutlined />}
+              onClick={() => handleReconcile(record)}
+            >
+              對帳
+            </Button>
+          )}
+          {record.is_reconciled && (
+            <Button 
+              type="link" 
+              icon={<CloseCircleOutlined />}
+              onClick={() => handleUnreconcile(record)}
+            >
+              取消對帳
+            </Button>
+          )}
           <Button 
             type="link" 
             icon={<EditOutlined />}
@@ -121,6 +175,7 @@ function BankLedger() {
 
   const handleEdit = (record) => {
     setEditingRecord(record)
+    form.resetFields()
     const formValues = {
       ...record,
       txn_date: dayjs(record.txn_date),
@@ -129,6 +184,12 @@ function BankLedger() {
     }
     form.setFieldsValue(formValues)
     setIsModalOpen(true)
+  }
+
+  const handleCancel = () => {
+    setIsModalOpen(false)
+    setEditingRecord(null)
+    form.resetFields()
   }
 
   const handleDelete = async (id) => {
@@ -160,6 +221,7 @@ function BankLedger() {
         message.success('新增成功')
       }
       setIsModalOpen(false)
+      setEditingRecord(null)
       form.resetFields()
       loadData()
     } catch (error) {
@@ -170,6 +232,83 @@ function BankLedger() {
 
   const handleExport = () => {
     message.info('匯出功能待實作')
+  }
+
+  const handleReconcile = async (record) => {
+    setReconcilingRecord(record)
+    setReconcileLoading(true)
+    try {
+      // 根據記錄類型載入可對帳的資料
+      if (record.income > 0) {
+        // 收入對帳：載入應收帳款
+        const receivables = await getReconcilableReceivables()
+        setReconcilableReceivables(receivables)
+        setReconcilableServiceExpenses([])
+      } else if (record.expense > 0) {
+        // 支出對帳：載入服務費用
+        const expenses = await getReconcilableServiceExpenses()
+        setReconcilableServiceExpenses(expenses)
+        setReconcilableReceivables([])
+      }
+      reconcileForm.resetFields()
+      setIsReconcileModalOpen(true)
+    } catch (error) {
+      message.error('載入可對帳資料失敗：' + (error.response?.data?.detail || error.message))
+    } finally {
+      setReconcileLoading(false)
+    }
+  }
+
+  const handleUnreconcile = async (record) => {
+    try {
+      await unreconcileBankLedger(record.id, true)
+      message.success('取消對帳成功')
+      loadData()
+    } catch (error) {
+      message.error('取消對帳失敗：' + (error.response?.data?.detail || error.message))
+    }
+  }
+
+  const handleReconcileSubmit = async () => {
+    try {
+      const values = await reconcileForm.validateFields()
+      const reconcileData = {
+        reconcile_type: reconcilingRecord.income > 0 ? 'receivable' : 'service_expense',
+        auto_update: true
+      }
+
+      if (reconcilingRecord.income > 0) {
+        // 收入對帳
+        const selectedReceivable = reconcilableReceivables.find(r => r.id === values.receivable_id)
+        if (!selectedReceivable) {
+          message.error('請選擇應收帳款')
+          return
+        }
+        reconcileData.ar_id = values.receivable_id
+        reconcileData.ar_type = selectedReceivable.type
+      } else {
+        // 支出對帳
+        reconcileData.service_expense_id = values.service_expense_id
+      }
+
+      await reconcileBankLedger(reconcilingRecord.id, reconcileData)
+      message.success('對帳成功')
+      setIsReconcileModalOpen(false)
+      setReconcilingRecord(null)
+      reconcileForm.resetFields()
+      loadData()
+    } catch (error) {
+      if (error.errorFields) return
+      message.error('對帳失敗：' + (error.response?.data?.detail || error.message))
+    }
+  }
+
+  const handleReconcileCancel = () => {
+    setIsReconcileModalOpen(false)
+    setReconcilingRecord(null)
+    setReconcilableReceivables([])
+    setReconcilableServiceExpenses([])
+    reconcileForm.resetFields()
   }
 
   const totalExpense = dataSource.reduce((sum, item) => sum + (item.expense || 0), 0)
@@ -223,18 +362,16 @@ function BankLedger() {
         title={editingRecord ? '編輯帳本記錄' : '新增帳本記錄'}
         open={isModalOpen}
         onOk={handleSubmit}
-        onCancel={() => {
-          setIsModalOpen(false)
-          form.resetFields()
-        }}
+        onCancel={handleCancel}
         width={600}
         okText="確定"
         cancelText="取消"
+        destroyOnClose
       >
         <Form
+          key={editingRecord ? editingRecord.id : 'new'}
           form={form}
           layout="vertical"
-          initialValues={editingRecord}
         >
           <Form.Item
             label="日期"
@@ -283,6 +420,105 @@ function BankLedger() {
           <Form.Item label="備註" name="note">
             <TextArea rows={3} />
           </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="對帳"
+        open={isReconcileModalOpen}
+        onOk={handleReconcileSubmit}
+        onCancel={handleReconcileCancel}
+        width={800}
+        okText="確定對帳"
+        cancelText="取消"
+        destroyOnClose
+        confirmLoading={reconcileLoading}
+      >
+        {reconcilingRecord && (
+          <div style={{ marginBottom: 16, padding: 12, background: '#f0f0f0', borderRadius: 4 }}>
+            <p><strong>日期：</strong>{reconcilingRecord.txn_date}</p>
+            <p><strong>匯款人：</strong>{reconcilingRecord.payer || '-'}</p>
+            <p><strong>金額：</strong>
+              {reconcilingRecord.income > 0 
+                ? `收入 NT$ ${reconcilingRecord.income.toLocaleString()}`
+                : `支出 NT$ ${reconcilingRecord.expense.toLocaleString()}`
+              }
+            </p>
+            <p><strong>備註：</strong>{reconcilingRecord.note || '-'}</p>
+          </div>
+        )}
+
+        <Form
+          form={reconcileForm}
+          layout="vertical"
+        >
+          {reconcilingRecord?.income > 0 && (
+            <Form.Item
+              label="選擇應收帳款"
+              name="receivable_id"
+              rules={[{ required: true, message: '請選擇應收帳款' }]}
+            >
+              <Select
+                placeholder="請選擇應收帳款"
+                showSearch
+                filterOption={(input, option) =>
+                  (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+                loading={reconcileLoading}
+              >
+                {reconcilableReceivables.map(ar => (
+                  <Select.Option 
+                    key={ar.id} 
+                    value={ar.id}
+                    label={`${ar.contract_code} - ${ar.customer_name} (${ar.type})`}
+                  >
+                    <div>
+                      <div><strong>{ar.contract_code}</strong> - {ar.customer_name} <Tag color={ar.type === '租賃' ? 'blue' : 'green'}>{ar.type}</Tag></div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>
+                        應收：NT$ {ar.amount.toLocaleString()} + 手續費：NT$ {ar.fee.toLocaleString()} = NT$ {(ar.amount + ar.fee).toLocaleString()} | 
+                        已收：NT$ {ar.received_amount.toLocaleString()} | 
+                        未收：NT$ {ar.unpaid_amount.toLocaleString()} | 
+                        狀態：<Tag color={ar.payment_status === '未收' ? 'red' : ar.payment_status === '部分收款' ? 'orange' : 'green'}>{ar.payment_status}</Tag>
+                      </div>
+                    </div>
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
+
+          {reconcilingRecord?.expense > 0 && (
+            <Form.Item
+              label="選擇服務費用"
+              name="service_expense_id"
+              rules={[{ required: true, message: '請選擇服務費用' }]}
+            >
+              <Select
+                placeholder="請選擇服務費用"
+                showSearch
+                filterOption={(input, option) =>
+                  (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+                loading={reconcileLoading}
+              >
+                {reconcilableServiceExpenses.map(se => (
+                  <Select.Option 
+                    key={se.id} 
+                    value={se.id}
+                    label={`${se.contract_code} - ${se.customer_name} (${se.service_type})`}
+                  >
+                    <div>
+                      <div><strong>{se.contract_code}</strong> - {se.customer_name} <Tag color={se.service_type === '業務' ? 'blue' : 'purple'}>{se.service_type}</Tag></div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>
+                        金額：NT$ {se.total_amount.toLocaleString()} | 
+                        狀態：<Tag color={se.payment_status === '未收' ? 'red' : se.payment_status === '部分收款' ? 'orange' : 'green'}>{se.payment_status}</Tag>
+                      </div>
+                    </div>
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
         </Form>
       </Modal>
     </div>
