@@ -8,7 +8,11 @@ app = FastAPI(title="印表機記帳平台 API", version="1.0.0")
 # CORS 設定（允許前端連接）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],  # 明確指定前端來源
+    allow_origins=[
+        "http://localhost:3000",  # 本地開發環境 (Vite)
+        "http://localhost:5173",  # 本地開發環境 (Vite 預設)
+        "https://miracle-frontend.onrender.com",  # 生產環境前端
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
