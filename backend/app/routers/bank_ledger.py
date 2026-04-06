@@ -19,12 +19,14 @@ class BankLedgerBase(BaseModel):
     reconciled_payable_contract_code: Optional[str] = None
     reconciled_payable_type: Optional[str] = None
     reconciled_service_expense_id: Optional[int] = None
+    reconciled_fee_amount: float = 0
 
 class ReconcileRequest(BaseModel):
     reconcile_type: str  # "receivable" 或 "service_expense"
     ar_id: Optional[int] = None  # 應收帳款 ID（收入對帳時）
     ar_type: Optional[str] = None  # 應收帳款類型（租賃/買斷）
     service_expense_id: Optional[int] = None  # 服務費用 ID（支出對帳時）
+    fee_amount: float = 0  # 對帳時額外輸入的手續費（累加到應收帳款）
     auto_update: bool = True  # 是否自動更新應收/應付帳款
 
 class BankLedgerCreate(BankLedgerBase):
@@ -37,6 +39,17 @@ class BankLedger(BankLedgerBase):
     id: int
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+def _normalize_ar_type(ar_type: Optional[str]) -> Optional[str]:
+    if not ar_type:
+        return None
+    value = str(ar_type).strip().lower()
+    if value in {"租賃", "租赁", "leasing", "lease"}:
+        return "租賃"
+    if value in {"買斷", "买断", "buyout"}:
+        return "買斷"
+    return None
 
 def _row_to_ledger(row) -> dict:
     """將資料庫查詢結果轉換為字典"""
@@ -53,8 +66,9 @@ def _row_to_ledger(row) -> dict:
         'reconciled_payable_contract_code': row[9],
         'reconciled_payable_type': row[10],
         'reconciled_service_expense_id': row[11],
-        'created_at': row[12].strftime('%Y-%m-%d %H:%M:%S') if row[12] else None,
-        'updated_at': row[13].strftime('%Y-%m-%d %H:%M:%S') if row[13] else None
+        'reconciled_fee_amount': float(row[12]) if row[12] else 0,
+        'created_at': row[13].strftime('%Y-%m-%d %H:%M:%S') if row[13] else None,
+        'updated_at': row[14].strftime('%Y-%m-%d %H:%M:%S') if row[14] else None
     }
 
 @router.get("", response_model=List[dict])
@@ -86,7 +100,7 @@ def get_bank_ledger(
             SELECT id, txn_date, payer, expense, income, note,
                    is_reconciled, reconciled_ar_id, reconciled_ar_type,
                    reconciled_payable_contract_code, reconciled_payable_type,
-                   reconciled_service_expense_id,
+                   reconciled_service_expense_id, reconciled_fee_amount,
                    created_at, updated_at
             FROM bank_ledger
             {where_clause}
@@ -107,19 +121,19 @@ def create_bank_ledger(ledger: BankLedgerCreate):
                 (txn_date, payer, expense, income, note, is_reconciled,
                  reconciled_ar_id, reconciled_ar_type,
                  reconciled_payable_contract_code, reconciled_payable_type,
-                 reconciled_service_expense_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 reconciled_service_expense_id, reconciled_fee_amount)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id, txn_date, payer, expense, income, note,
                          is_reconciled, reconciled_ar_id, reconciled_ar_type,
                          reconciled_payable_contract_code, reconciled_payable_type,
-                         reconciled_service_expense_id,
+                         reconciled_service_expense_id, reconciled_fee_amount,
                          created_at, updated_at
             """, (
                 ledger.txn_date, ledger.payer, ledger.expense, ledger.income,
                 ledger.note, ledger.is_reconciled,
                 ledger.reconciled_ar_id, ledger.reconciled_ar_type,
                 ledger.reconciled_payable_contract_code, ledger.reconciled_payable_type,
-                ledger.reconciled_service_expense_id
+                ledger.reconciled_service_expense_id, ledger.reconciled_fee_amount
             ))
             
             row = cur.fetchone()
@@ -148,19 +162,20 @@ def update_bank_ledger(id: int, ledger: BankLedgerUpdate):
                     reconciled_ar_id = %s, reconciled_ar_type = %s,
                     reconciled_payable_contract_code = %s, reconciled_payable_type = %s,
                     reconciled_service_expense_id = %s,
+                    reconciled_fee_amount = %s,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
                 RETURNING id, txn_date, payer, expense, income, note,
                          is_reconciled, reconciled_ar_id, reconciled_ar_type,
                          reconciled_payable_contract_code, reconciled_payable_type,
-                         reconciled_service_expense_id,
+                         reconciled_service_expense_id, reconciled_fee_amount,
                          created_at, updated_at
             """, (
                 ledger.txn_date, ledger.payer, ledger.expense, ledger.income,
                 ledger.note, ledger.is_reconciled,
                 ledger.reconciled_ar_id, ledger.reconciled_ar_type,
                 ledger.reconciled_payable_contract_code, ledger.reconciled_payable_type,
-                ledger.reconciled_service_expense_id,
+                ledger.reconciled_service_expense_id, ledger.reconciled_fee_amount,
                 id
             ))
             
@@ -364,15 +379,16 @@ def reconcile_bank_ledger(id: int, request: ReconcileRequest):
             if request.reconcile_type == "receivable" and request.ar_id:
                 if not income or income <= 0:
                     raise HTTPException(status_code=400, detail="此記錄不是收入記錄")
+                normalized_ar_type = _normalize_ar_type(request.ar_type)
                 
                 # 取得應收帳款資訊
-                if request.ar_type == "租賃":
+                if normalized_ar_type == "租賃":
                     cur.execute("""
                         SELECT id, total_rent, fee, received_amount, payment_status
                         FROM ar_leasing
                         WHERE id = %s
                     """, (request.ar_id,))
-                elif request.ar_type == "買斷":
+                elif normalized_ar_type == "買斷":
                     cur.execute("""
                         SELECT id, total_amount, fee, received_amount, payment_status
                         FROM ar_buyout
@@ -389,8 +405,11 @@ def reconcile_bank_ledger(id: int, request: ReconcileRequest):
                 amount = float(amount) if amount else 0.0
                 fee = float(fee) if fee else 0.0
                 received_amount = float(received_amount) if received_amount else 0.0
-                total_amount = amount + fee
-                unpaid_amount = total_amount - received_amount
+                fee_amount = float(request.fee_amount) if request.fee_amount else 0.0
+                if fee_amount < 0:
+                    raise HTTPException(status_code=400, detail="手續費不可為負數")
+                new_fee = fee + fee_amount
+                total_amount = amount + new_fee
                 
                 # 更新銀行帳本
                 cur.execute("""
@@ -398,9 +417,10 @@ def reconcile_bank_ledger(id: int, request: ReconcileRequest):
                     SET is_reconciled = true,
                         reconciled_ar_id = %s,
                         reconciled_ar_type = %s,
+                        reconciled_fee_amount = %s,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
-                """, (request.ar_id, request.ar_type, id))
+                """, (request.ar_id, normalized_ar_type, fee_amount, id))
                 
                 # 自動更新應收帳款
                 if request.auto_update:
@@ -413,22 +433,24 @@ def reconcile_bank_ledger(id: int, request: ReconcileRequest):
                     else:
                         new_payment_status = "未收"
                     
-                    if request.ar_type == "租賃":
+                    if normalized_ar_type == "租賃":
                         cur.execute("""
                             UPDATE ar_leasing
-                            SET received_amount = %s,
+                            SET fee = %s,
+                                received_amount = %s,
                                 payment_status = %s,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE id = %s
-                        """, (new_received_amount, new_payment_status, request.ar_id))
+                        """, (new_fee, new_received_amount, new_payment_status, request.ar_id))
                     else:
                         cur.execute("""
                             UPDATE ar_buyout
-                            SET received_amount = %s,
+                            SET fee = %s,
+                                received_amount = %s,
                                 payment_status = %s,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE id = %s
-                        """, (new_received_amount, new_payment_status, request.ar_id))
+                        """, (new_fee, new_received_amount, new_payment_status, request.ar_id))
             
             # 支出對帳
             elif request.reconcile_type == "service_expense" and request.service_expense_id:
@@ -454,6 +476,7 @@ def reconcile_bank_ledger(id: int, request: ReconcileRequest):
                     UPDATE bank_ledger
                     SET is_reconciled = true,
                         reconciled_service_expense_id = %s,
+                        reconciled_fee_amount = 0,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
                 """, (request.service_expense_id, id))
@@ -476,7 +499,7 @@ def reconcile_bank_ledger(id: int, request: ReconcileRequest):
                 SELECT id, txn_date, payer, expense, income, note,
                        is_reconciled, reconciled_ar_id, reconciled_ar_type,
                        reconciled_payable_contract_code, reconciled_payable_type,
-                       reconciled_service_expense_id,
+                       reconciled_service_expense_id, reconciled_fee_amount,
                        created_at, updated_at
                 FROM bank_ledger
                 WHERE id = %s
@@ -502,7 +525,7 @@ def unreconcile_bank_ledger(id: int, revert: bool = Query(True, description="是
             cur.execute("""
                 SELECT id, income, expense, is_reconciled,
                        reconciled_ar_id, reconciled_ar_type,
-                       reconciled_service_expense_id
+                       reconciled_service_expense_id, reconciled_fee_amount
                 FROM bank_ledger
                 WHERE id = %s
             """, (id,))
@@ -511,20 +534,22 @@ def unreconcile_bank_ledger(id: int, revert: bool = Query(True, description="是
             if not ledger_row:
                 raise HTTPException(status_code=404, detail="銀行帳本記錄不存在")
             
-            ledger_id, income, expense, is_reconciled, ar_id, ar_type, se_id = ledger_row
+            ledger_id, income, expense, is_reconciled, ar_id, ar_type, se_id, reconciled_fee_amount = ledger_row
             
             # 轉換為 float（PostgreSQL 的 NUMERIC 類型會返回 decimal.Decimal）
             income = float(income) if income else 0.0
             expense = float(expense) if expense else 0.0
+            reconciled_fee_amount = float(reconciled_fee_amount) if reconciled_fee_amount else 0.0
             
             if not is_reconciled:
                 raise HTTPException(status_code=400, detail="此記錄未對帳")
             
             # 取消收入對帳
-            if ar_id and ar_type:
+            normalized_ar_type = _normalize_ar_type(ar_type)
+            if ar_id and normalized_ar_type:
                 # 還原應收帳款
                 if revert:
-                    if ar_type == "租賃":
+                    if normalized_ar_type == "租賃":
                         cur.execute("""
                             SELECT total_rent, fee, received_amount
                             FROM ar_leasing
@@ -543,7 +568,8 @@ def unreconcile_bank_ledger(id: int, revert: bool = Query(True, description="是
                         amount = float(amount) if amount else 0.0
                         fee = float(fee) if fee else 0.0
                         received_amount = float(received_amount) if received_amount else 0.0
-                        total_amount = amount + fee
+                        new_fee = max(0, fee - reconciled_fee_amount)
+                        total_amount = amount + new_fee
                         
                         # 扣除對帳金額
                         new_received_amount = max(0, received_amount - income)
@@ -556,22 +582,24 @@ def unreconcile_bank_ledger(id: int, revert: bool = Query(True, description="是
                         else:
                             new_payment_status = "未收"
                         
-                        if ar_type == "租賃":
+                        if normalized_ar_type == "租賃":
                             cur.execute("""
                                 UPDATE ar_leasing
-                                SET received_amount = %s,
+                                SET fee = %s,
+                                    received_amount = %s,
                                     payment_status = %s,
                                     updated_at = CURRENT_TIMESTAMP
                                 WHERE id = %s
-                            """, (new_received_amount, new_payment_status, ar_id))
+                            """, (new_fee, new_received_amount, new_payment_status, ar_id))
                         else:
                             cur.execute("""
                                 UPDATE ar_buyout
-                                SET received_amount = %s,
+                                SET fee = %s,
+                                    received_amount = %s,
                                     payment_status = %s,
                                     updated_at = CURRENT_TIMESTAMP
                                 WHERE id = %s
-                            """, (new_received_amount, new_payment_status, ar_id))
+                            """, (new_fee, new_received_amount, new_payment_status, ar_id))
                 
                 # 清除銀行帳本對帳資訊
                 cur.execute("""
@@ -579,6 +607,7 @@ def unreconcile_bank_ledger(id: int, revert: bool = Query(True, description="是
                     SET is_reconciled = false,
                         reconciled_ar_id = NULL,
                         reconciled_ar_type = NULL,
+                        reconciled_fee_amount = 0,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
                 """, (id,))
@@ -599,6 +628,7 @@ def unreconcile_bank_ledger(id: int, revert: bool = Query(True, description="是
                     UPDATE bank_ledger
                     SET is_reconciled = false,
                         reconciled_service_expense_id = NULL,
+                        reconciled_fee_amount = 0,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
                 """, (id,))
@@ -612,7 +642,7 @@ def unreconcile_bank_ledger(id: int, revert: bool = Query(True, description="是
                 SELECT id, txn_date, payer, expense, income, note,
                        is_reconciled, reconciled_ar_id, reconciled_ar_type,
                        reconciled_payable_contract_code, reconciled_payable_type,
-                       reconciled_service_expense_id,
+                       reconciled_service_expense_id, reconciled_fee_amount,
                        created_at, updated_at
                 FROM bank_ledger
                 WHERE id = %s

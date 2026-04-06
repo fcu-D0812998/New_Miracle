@@ -187,6 +187,11 @@ function Contracts() {
   const handleAdd = (type) => {
     setEditingRecord({ type })
     form.resetFields()
+    form.setFieldsValue({
+      quantity: 1,
+      payment_cycle_months: 1,
+      needs_invoice: false
+    })
     setIsModalOpen(true)
   }
 
@@ -266,10 +271,8 @@ function Contracts() {
       const submitData = {
         ...values,
         start_date: values.start_date ? values.start_date.format('YYYY-MM-DD') : null,
-        deal_date: values.deal_date ? values.deal_date.format('YYYY-MM-DD') : null,
-        customer_code: values.customer_name  // customer_name 實際是 customer_code
+        deal_date: values.deal_date ? values.deal_date.format('YYYY-MM-DD') : null
       }
-      delete submitData.customer_name
 
       if (editingRecord.contract_code) {
         if (editingRecord.type === 'leasing') {
@@ -306,7 +309,7 @@ function Contracts() {
       <Form.Item label="合約編號" name="contract_code" rules={[{ required: true }]}>
         <Input />
       </Form.Item>
-      <Form.Item label="客戶名稱" name="customer_name" rules={[{ required: true }]}>
+      <Form.Item label="客戶名稱" name="customer_code" rules={[{ required: true }]}>
         <Select options={customers} />
       </Form.Item>
       <Space.Compact style={{ width: '100%' }}>
@@ -321,13 +324,13 @@ function Contracts() {
         </Form.Item>
       </Space.Compact>
       <Space.Compact style={{ width: '100%' }}>
-        <Form.Item label="月租金" name="monthly_rent" style={{ flex: 1 }}>
+        <Form.Item label="月租金" name="monthly_rent" rules={[{ required: true, message: '請輸入月租金' }]} style={{ flex: 1 }}>
           <InputNumber min={0} step={100} style={{ width: '100%' }} />
         </Form.Item>
-        <Form.Item label="繳費週期(月)" name="payment_cycle_months" style={{ flex: 1 }}>
+        <Form.Item label="繳費週期(月)" name="payment_cycle_months" rules={[{ required: true, message: '請輸入繳費週期' }]} style={{ flex: 1 }}>
           <InputNumber min={1} style={{ width: '100%' }} />
         </Form.Item>
-        <Form.Item label="合約期數(月)" name="contract_months" style={{ flex: 1 }}>
+        <Form.Item label="合約期數(月)" name="contract_months" rules={[{ required: true, message: '請輸入合約期數' }]} style={{ flex: 1 }}>
           <InputNumber min={0} style={{ width: '100%' }} />
         </Form.Item>
       </Space.Compact>
@@ -364,14 +367,14 @@ function Contracts() {
       <Form.Item label="合約編號" name="contract_code" rules={[{ required: true }]}>
         <Input />
       </Form.Item>
-      <Form.Item label="客戶名稱" name="customer_name" rules={[{ required: true }]}>
+      <Form.Item label="客戶名稱" name="customer_code" rules={[{ required: true }]}>
         <Select options={customers} />
       </Form.Item>
       <Space.Compact style={{ width: '100%' }}>
         <Form.Item label="成交日期" name="deal_date" rules={[{ required: true }]} style={{ flex: 1 }}>
           <DatePicker style={{ width: '100%' }} />
         </Form.Item>
-        <Form.Item label="成交金額" name="deal_amount" style={{ flex: 1 }}>
+        <Form.Item label="成交金額" name="deal_amount" rules={[{ required: true, message: '請輸入成交金額' }]} style={{ flex: 1 }}>
           <InputNumber min={0} step={100} style={{ width: '100%' }} />
         </Form.Item>
       </Space.Compact>

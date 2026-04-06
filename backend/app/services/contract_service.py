@@ -26,7 +26,7 @@ def generate_leasing_ar(contract_code: str, customer_code: str, customer_name: s
             """, (contract_code, customer_code, customer_name, current_start, current_end,
                   period_rent, 0, 0, '未收'))
             
-            current_start = add_months(current_end, 1)
+            current_start = add_months(current_start, payment_cycle_months)
         
         if remaining_months > 0:
             current_end = subtract_days(add_months(current_start, remaining_months), 1)

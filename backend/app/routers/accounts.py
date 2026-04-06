@@ -173,7 +173,7 @@ def get_unpaid_payables(
         # 查詢租賃合約的未出帳款（業務）
         if not contract_type or contract_type == '租賃':
             if not payable_type or payable_type == '業務':
-                where_parts = ["sales_payment_status != '已付款'", "sales_amount > 0"]
+                where_parts = ["status = 'active'", "sales_payment_status != '已付款'", "sales_amount > 0"]
                 params = []
                 
                 if contract_code:
@@ -209,7 +209,7 @@ def get_unpaid_payables(
         # 查詢租賃合約的未出帳款（維護）
         if not contract_type or contract_type == '租賃':
             if not payable_type or payable_type == '維護':
-                where_parts = ["service_payment_status != '已付款'", "service_amount > 0"]
+                where_parts = ["status = 'active'", "service_payment_status != '已付款'", "service_amount > 0"]
                 params = []
                 
                 if contract_code:
@@ -245,7 +245,7 @@ def get_unpaid_payables(
         # 查詢買斷合約的未出帳款（業務）
         if not contract_type or contract_type == '買斷':
             if not payable_type or payable_type == '業務':
-                where_parts = ["sales_payment_status != '已付款'", "sales_amount > 0"]
+                where_parts = ["status = 'active'", "sales_payment_status != '已付款'", "sales_amount > 0"]
                 params = []
                 
                 if contract_code:
@@ -280,7 +280,7 @@ def get_unpaid_payables(
             
             # 查詢買斷合約的未出帳款（維護）
             if not payable_type or payable_type == '維護':
-                where_parts = ["service_payment_status != '已付款'", "service_amount > 0"]
+                where_parts = ["status = 'active'", "service_payment_status != '已付款'", "service_amount > 0"]
                 params = []
                 
                 if contract_code:

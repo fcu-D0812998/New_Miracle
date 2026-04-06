@@ -11,6 +11,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",  # 本地開發環境 (Vite)
         "http://localhost:5173",  # 本地開發環境 (Vite 預設)
+        "http://127.0.0.1:3000",  # 本地開發環境 (localhost 別名)
+        "http://127.0.0.1:5173",  # 本地開發環境 (localhost 別名)
         "https://miracle-frontend.onrender.com",  # 生產環境前端
     ],
     allow_credentials=True,

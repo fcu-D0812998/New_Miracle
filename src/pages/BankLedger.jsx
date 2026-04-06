@@ -79,6 +79,11 @@ function BankLedger() {
     }
   }, [isModalOpen, editingRecord])
 
+  const formatReceivablePeriod = (receivable) => {
+    if (!receivable?.date) return '-'
+    return receivable.end_date ? `${receivable.date} ~ ${receivable.end_date}` : receivable.date
+  }
+
   const columns = [
     { title: '日期', dataIndex: 'txn_date', key: 'txn_date', width: 120 },
     { title: '匯款人', dataIndex: 'payer', key: 'payer', width: 150 },
@@ -251,6 +256,9 @@ function BankLedger() {
         setReconcilableReceivables([])
       }
       reconcileForm.resetFields()
+      if (record.income > 0) {
+        reconcileForm.setFieldsValue({ fee_amount: 0 })
+      }
       setIsReconcileModalOpen(true)
     } catch (error) {
       message.error('載入可對帳資料失敗：' + (error.response?.data?.detail || error.message))
@@ -285,7 +293,8 @@ function BankLedger() {
           return
         }
         reconcileData.ar_id = values.receivable_id
-        reconcileData.ar_type = selectedReceivable.type
+        reconcileData.ar_type = selectedReceivable.type === '租賃' ? 'leasing' : 'buyout'
+        reconcileData.fee_amount = values.fee_amount || 0
       } else {
         // 支出對帳
         reconcileData.service_expense_id = values.service_expense_id
@@ -448,44 +457,62 @@ function BankLedger() {
           </div>
         )}
 
-        <Form
-          form={reconcileForm}
-          layout="vertical"
-        >
-          {reconcilingRecord?.income > 0 && (
-            <Form.Item
-              label="選擇應收帳款"
-              name="receivable_id"
-              rules={[{ required: true, message: '請選擇應收帳款' }]}
-            >
-              <Select
-                placeholder="請選擇應收帳款"
-                showSearch
-                filterOption={(input, option) =>
-                  (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                }
-                loading={reconcileLoading}
-              >
-                {reconcilableReceivables.map(ar => (
-                  <Select.Option 
-                    key={ar.id} 
-                    value={ar.id}
-                    label={`${ar.contract_code} - ${ar.customer_name} (${ar.type})`}
+          <Form
+            form={reconcileForm}
+            layout="vertical"
+          >
+            {reconcilingRecord?.income > 0 && (
+              <>
+                <Form.Item
+                  label="選擇應收帳款"
+                  name="receivable_id"
+                  rules={[{ required: true, message: '請選擇應收帳款' }]}
+                >
+                  <Select
+                    placeholder="請選擇應收帳款"
+                    showSearch
+                    filterOption={(input, option) =>
+                      (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                    }
+                    loading={reconcileLoading}
                   >
-                    <div>
-                      <div><strong>{ar.contract_code}</strong> - {ar.customer_name} <Tag color={ar.type === '租賃' ? 'blue' : 'green'}>{ar.type}</Tag></div>
-                      <div style={{ fontSize: '12px', color: '#666' }}>
-                        應收：NT$ {ar.amount.toLocaleString()} + 手續費：NT$ {ar.fee.toLocaleString()} = NT$ {(ar.amount + ar.fee).toLocaleString()} | 
-                        已收：NT$ {ar.received_amount.toLocaleString()} | 
-                        未收：NT$ {ar.unpaid_amount.toLocaleString()} | 
-                        狀態：<Tag color={ar.payment_status === '未收' ? 'red' : ar.payment_status === '部分收款' ? 'orange' : 'green'}>{ar.payment_status}</Tag>
-                      </div>
-                    </div>
-                  </Select.Option>
-                ))}
-              </Select>
-            </Form.Item>
-          )}
+                    {reconcilableReceivables.map(ar => (
+                      <Select.Option 
+                        key={ar.id} 
+                        value={ar.id}
+                        label={`${ar.contract_code} - ${ar.customer_name} (${ar.type}) | 收款期間：${formatReceivablePeriod(ar)}`}
+                      >
+                        <div>
+                          <div><strong>{ar.contract_code}</strong> - {ar.customer_name} <Tag color={ar.type === '租賃' ? 'blue' : 'green'}>{ar.type}</Tag></div>
+                          <div style={{ fontSize: '12px', color: '#666' }}>
+                            收款期間：{formatReceivablePeriod(ar)} |
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#666' }}>
+                            應收：NT$ {ar.amount.toLocaleString()} + 手續費：NT$ {ar.fee.toLocaleString()} = NT$ {(ar.amount + ar.fee).toLocaleString()} | 
+                            已收：NT$ {ar.received_amount.toLocaleString()} | 
+                            未收：NT$ {ar.unpaid_amount.toLocaleString()} | 
+                            狀態：<Tag color={ar.payment_status === '未收' ? 'red' : ar.payment_status === '部分收款' ? 'orange' : 'green'}>{ar.payment_status}</Tag>
+                          </div>
+                        </div>
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+                <Form.Item
+                  label="手續費"
+                  name="fee_amount"
+                  tooltip="若本次對帳有額外手續費，會累加到這筆應收帳款，取消對帳時也會一併還原"
+                >
+                  <InputNumber
+                    min={0}
+                    step={1}
+                    style={{ width: '100%' }}
+                    addonBefore="NT$"
+                    placeholder="沒有可填 0"
+                  />
+                </Form.Item>
+              </>
+            )}
 
           {reconcilingRecord?.expense > 0 && (
             <Form.Item

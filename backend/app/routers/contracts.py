@@ -72,12 +72,31 @@ def _fetch_buyout(cur, contract_code: str, for_update: bool = False):
     return cur.fetchone()
 
 
+def _delete_service_expenses(cur, contract_code: str):
+    cur.execute("DELETE FROM service_expense WHERE contract_code = %s", (contract_code,))
+
+
 def get_customer_name(customer_code: str, conn) -> str:
     """取得客戶名稱"""
     with conn.cursor() as cur:
         cur.execute("SELECT name FROM customers WHERE customer_code = %s", (customer_code,))
         row = cur.fetchone()
         return row[0] if row else ""
+
+
+def _validate_leasing_receivable_fields(contract: ContractLeasingCreate):
+    has_monthly_rent = contract.monthly_rent is not None
+    has_contract_months = contract.contract_months is not None
+
+    if has_contract_months and not has_monthly_rent:
+        raise HTTPException(status_code=400, detail="租賃合約要生成應收帳款時，請填寫月租金")
+    if has_monthly_rent and not has_contract_months:
+        raise HTTPException(status_code=400, detail="租賃合約要生成應收帳款時，請填寫合約期數")
+
+
+def _validate_buyout_receivable_fields(contract: ContractBuyoutCreate):
+    if contract.deal_amount is None:
+        raise HTTPException(status_code=400, detail="買斷合約要生成應收帳款時，請填寫成交金額")
 
 @router.get("/leasing", response_model=List[ContractLeasing])
 def get_leasing_contracts(search: Optional[str] = Query(None)):
@@ -145,6 +164,7 @@ def create_leasing_contract(contract: ContractLeasingCreate):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            _validate_leasing_receivable_fields(contract)
             customer_name = get_customer_name(contract.customer_code, conn)
             
             monthly_rent = contract.monthly_rent
@@ -187,6 +207,9 @@ def create_leasing_contract(contract: ContractLeasingCreate):
             if not row:
                 raise HTTPException(status_code=500, detail="合約讀取失敗")
             return _leasing_row_to_contract(row)
+    except HTTPException:
+        conn.rollback()
+        raise
     except Exception as e:
         conn.rollback()
         if "unique" in str(e).lower():
@@ -201,6 +224,7 @@ def create_buyout_contract(contract: ContractBuyoutCreate):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            _validate_buyout_receivable_fields(contract)
             customer_name = get_customer_name(contract.customer_code, conn)
             
             deal_amount = contract.deal_amount
@@ -239,6 +263,9 @@ def create_buyout_contract(contract: ContractBuyoutCreate):
             if not row:
                 raise HTTPException(status_code=500, detail="合約讀取失敗")
             return _buyout_row_to_contract(row)
+    except HTTPException:
+        conn.rollback()
+        raise
     except Exception as e:
         conn.rollback()
         if "unique" in str(e).lower():
@@ -253,6 +280,7 @@ def update_leasing_contract(contract_code: str, contract: ContractLeasingCreate)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            _validate_leasing_receivable_fields(contract)
             customer_name = get_customer_name(contract.customer_code, conn)
             new_contract_code = contract.contract_code
             code_changed = new_contract_code != contract_code
@@ -346,6 +374,7 @@ def update_buyout_contract(contract_code: str, contract: ContractBuyoutCreate):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            _validate_buyout_receivable_fields(contract)
             customer_name = get_customer_name(contract.customer_code, conn)
             new_contract_code = contract.contract_code
             code_changed = new_contract_code != contract_code
@@ -447,6 +476,7 @@ def pause_leasing_contract(contract_code: str):
                 WHERE contract_code = %s
             """, (contract_code,))
             cur.execute("DELETE FROM ar_leasing WHERE contract_code = %s", (contract_code,))
+            _delete_service_expenses(cur, contract_code)
 
             conn.commit()
             refreshed = _fetch_leasing(cur, contract_code)
@@ -496,6 +526,16 @@ def resume_leasing_contract(contract_code: str, payload: ContractResume):
                     contract_months,
                     conn
                 )
+            generate_service_expenses_for_leasing(
+                contract_code,
+                row[2],
+                row[3],
+                row[11],
+                float(row[12]) if row[12] else None,
+                row[13],
+                float(row[14]) if row[14] else None,
+                conn
+            )
 
             conn.commit()
             refreshed = _fetch_leasing(cur, contract_code)
@@ -529,6 +569,7 @@ def pause_buyout_contract(contract_code: str):
                 WHERE contract_code = %s
             """, (contract_code,))
             cur.execute("DELETE FROM ar_buyout WHERE contract_code = %s", (contract_code,))
+            _delete_service_expenses(cur, contract_code)
 
             conn.commit()
             refreshed = _fetch_buyout(cur, contract_code)
@@ -575,6 +616,16 @@ def resume_buyout_contract(contract_code: str, payload: ContractResume):
                     deal_amount,
                     conn
                 )
+            generate_service_expenses_for_buyout(
+                contract_code,
+                row[2],
+                row[3],
+                row[6],
+                float(row[7]) if row[7] else None,
+                row[8],
+                float(row[9]) if row[9] else None,
+                conn
+            )
 
             conn.commit()
             refreshed = _fetch_buyout(cur, contract_code)
@@ -596,7 +647,7 @@ def delete_leasing_contract(contract_code: str):
     try:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM ar_leasing WHERE contract_code = %s", (contract_code,))
-            cur.execute("DELETE FROM service_expense WHERE contract_code = %s", (contract_code,))
+            _delete_service_expenses(cur, contract_code)
             cur.execute("DELETE FROM contracts_leasing WHERE contract_code = %s", (contract_code,))
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="合約不存在")
@@ -611,11 +662,10 @@ def delete_buyout_contract(contract_code: str):
     try:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM ar_buyout WHERE contract_code = %s", (contract_code,))
-            cur.execute("DELETE FROM service_expense WHERE contract_code = %s", (contract_code,))
+            _delete_service_expenses(cur, contract_code)
             cur.execute("DELETE FROM contracts_buyout WHERE contract_code = %s", (contract_code,))
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="合約不存在")
             conn.commit()
     finally:
         conn.close()
-
