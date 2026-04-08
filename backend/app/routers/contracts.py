@@ -73,7 +73,11 @@ def _fetch_buyout(cur, contract_code: str, for_update: bool = False):
 
 
 def _delete_service_expenses(cur, contract_code: str):
-    cur.execute("DELETE FROM service_expense WHERE contract_code = %s", (contract_code,))
+    cur.execute("""
+        DELETE FROM service_expense
+        WHERE contract_code = %s
+          AND COALESCE(expense_source, 'contract') = 'contract'
+    """, (contract_code,))
 
 
 def get_customer_name(customer_code: str, conn) -> str:

@@ -86,6 +86,9 @@ export const resumeBuyoutContract = (contractCode, data = {}) =>
 export const getReceivables = (filters = {}) => 
   api.get('/accounts/receivables', { params: filters }).then(res => res.data)
 
+export const updateReceivableAmount = (arType, id, data) =>
+  api.put(`/accounts/receivables/${arType}/${id}/amount`, data).then(res => res.data)
+
 export const getUnpaidPayables = (filters = {}) => 
   api.get('/accounts/payables/unpaid', { params: filters }).then(res => res.data)
 
@@ -94,6 +97,12 @@ export const getPaidPayables = (filters = {}) =>
 
 export const getServiceExpenses = (filters = {}) => 
   api.get('/accounts/service', { params: filters }).then(res => res.data)
+
+export const updateServiceExpenseAmount = (id, data) =>
+  api.put(`/accounts/service/${id}/amount`, data).then(res => res.data)
+
+export const createExtraExpense = (data) =>
+  api.post('/accounts/service/extra', data).then(res => res.data)
 
 // 銀行帳本
 export const getBankLedger = (fromDate, toDate, search) => 

@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react'
-import { 
-  Table, 
-  Button, 
-  Space, 
-  Modal, 
-  Form, 
+import { useEffect, useMemo, useState } from 'react'
+import {
+  Table,
+  Button,
+  Space,
+  Modal,
+  Form,
   DatePicker,
   InputNumber,
   Input,
@@ -12,14 +12,24 @@ import {
   message,
   Popconfirm,
   Select,
-  Tag
+  Tag,
+  Divider
 } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, SearchOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
+import {
+  PlusOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  DownloadOutlined,
+  SearchOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  MinusCircleOutlined
+} from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { 
-  getBankLedger, 
-  createBankLedger, 
-  updateBankLedger, 
+import {
+  getBankLedger,
+  createBankLedger,
+  updateBankLedger,
   deleteBankLedger,
   getReconcilableReceivables,
   getReconcilableServiceExpenses,
@@ -29,6 +39,8 @@ import {
 
 const { TextArea } = Input
 const { RangePicker } = DatePicker
+
+const formatMoney = (value) => `NT$ ${Number(value || 0).toLocaleString()}`
 
 function BankLedger() {
   const [searchText, setSearchText] = useState('')
@@ -44,6 +56,7 @@ function BankLedger() {
   const [reconcilableServiceExpenses, setReconcilableServiceExpenses] = useState([])
   const [form] = Form.useForm()
   const [reconcileForm] = Form.useForm()
+  const watchedLines = Form.useWatch('lines', reconcileForm) || []
 
   const loadData = async () => {
     setLoading(true)
@@ -64,57 +77,88 @@ function BankLedger() {
   }, [dateRange, searchText])
 
   useEffect(() => {
-    if (isModalOpen) {
-      if (editingRecord) {
-        const formValues = {
-          ...editingRecord,
-          txn_date: dayjs(editingRecord.txn_date),
-          transaction_type: editingRecord.income > 0 ? 'income' : 'expense',
-          amount: editingRecord.income > 0 ? editingRecord.income : editingRecord.expense
-        }
-        form.setFieldsValue(formValues)
-      } else {
-        form.resetFields()
-      }
+    if (!isModalOpen) return
+    if (editingRecord) {
+      form.setFieldsValue({
+        ...editingRecord,
+        txn_date: dayjs(editingRecord.txn_date),
+        transaction_type: editingRecord.income > 0 ? 'income' : 'expense',
+        amount: editingRecord.income > 0 ? editingRecord.income : editingRecord.expense
+      })
+    } else {
+      form.resetFields()
     }
-  }, [isModalOpen, editingRecord])
+  }, [isModalOpen, editingRecord, form])
+
+  const ledgerAmount = useMemo(() => {
+    if (!reconcilingRecord) return 0
+    return reconcilingRecord.income > 0 ? reconcilingRecord.income : reconcilingRecord.expense
+  }, [reconcilingRecord])
+
+  const allocatedTotal = useMemo(
+    () => watchedLines.reduce((sum, line) => sum + Number(line?.allocated_amount || 0), 0),
+    [watchedLines]
+  )
+
+  const remainingAmount = Math.max(ledgerAmount - allocatedTotal, 0)
 
   const formatReceivablePeriod = (receivable) => {
     if (!receivable?.date) return '-'
     return receivable.end_date ? `${receivable.date} ~ ${receivable.end_date}` : receivable.date
   }
 
+  const getReceivableOptionLabel = (item) =>
+    `${item.contract_code} - ${item.customer_name} (${item.type}) | 收款期間：${formatReceivablePeriod(item)}`
+
+  const getExpenseOptionLabel = (item) => {
+    const itemType = item.expense_source === 'extra' ? (item.expense_category || '額外開銷') : item.service_type
+    const description = item.expense_description ? ` | ${item.expense_description}` : ''
+    return `${item.contract_code || '無合約'} - ${item.customer_name || '未綁定客戶'} (${itemType})${description}`
+  }
+
   const columns = [
     { title: '日期', dataIndex: 'txn_date', key: 'txn_date', width: 120 },
-    { title: '匯款人', dataIndex: 'payer', key: 'payer', width: 150 },
-    { 
-      title: '支出金額', 
-      dataIndex: 'expense', 
-      key: 'expense', 
-      width: 120,
-      render: (val) => val > 0 ? `NT$ ${val?.toLocaleString()}` : '-'
+    { title: '對象', dataIndex: 'payer', key: 'payer', width: 160 },
+    { title: '支出金額', dataIndex: 'expense', key: 'expense', width: 120, render: (value) => value > 0 ? formatMoney(value) : '-' },
+    { title: '收入金額', dataIndex: 'income', key: 'income', width: 120, render: (value) => value > 0 ? formatMoney(value) : '-' },
+    { title: '備註', dataIndex: 'note', key: 'note', width: 180 },
+    {
+      title: '對帳狀態',
+      dataIndex: 'is_reconciled',
+      key: 'is_reconciled',
+      width: 110,
+      render: (value) => value ? <Tag color="green">已對帳</Tag> : <Tag>未對帳</Tag>
     },
-    { 
-      title: '收入金額', 
-      dataIndex: 'income', 
-      key: 'income', 
-      width: 120,
-      render: (val) => val > 0 ? `NT$ ${val?.toLocaleString()}` : '-'
-    },
-    { title: '備註', dataIndex: 'note', key: 'note', width: 200 },
-    { 
-      title: '已對帳', 
-      dataIndex: 'is_reconciled', 
-      key: 'is_reconciled', 
-      width: 100,
-      render: (val) => val ? '✓' : '-'
-    },
-    { 
-      title: '對應帳款', 
+    {
+      title: '對帳資訊',
       key: 'reconciled_info',
-      width: 200,
+      width: 360,
       render: (_, record) => {
         if (!record.is_reconciled) return '-'
+
+        if (record.reconciliation_lines?.length) {
+          return (
+            <div>
+              {record.reconciliation_lines.map((line) => (
+                <div key={line.id} style={{ marginBottom: 6 }}>
+                  <strong>{line.item_type}</strong>
+                  {line.contract_code ? ` / ${line.contract_code}` : ''}
+                  {line.customer_name ? ` / ${line.customer_name}` : ''}
+                  {line.period ? ` / ${line.period}` : ''}
+                  {line.description ? ` / ${line.description}` : ''}
+                  <div style={{ fontSize: 12, color: '#666' }}>
+                    分攤 {formatMoney(line.allocated_amount)}
+                    {line.fee_amount > 0 ? ` | 手續費 ${formatMoney(line.fee_amount)}` : ''}
+                  </div>
+                </div>
+              ))}
+              <div style={{ fontSize: 12, color: '#666' }}>
+                已分攤 {formatMoney(record.reconciled_amount)} / 剩餘 {formatMoney(record.unallocated_amount)}
+              </div>
+            </div>
+          )
+        }
+
         if (record.reconciled_ar_id) {
           return `應收帳款 #${record.reconciled_ar_id} (${record.reconciled_ar_type})`
         }
@@ -130,46 +174,29 @@ function BankLedger() {
     {
       title: '操作',
       key: 'action',
-      width: 200,
+      width: 220,
       fixed: 'right',
       render: (_, record) => (
         <Space>
           {!record.is_reconciled && (
-            <Button 
-              type="link" 
-              icon={<CheckCircleOutlined />}
-              onClick={() => handleReconcile(record)}
-            >
+            <Button type="link" icon={<CheckCircleOutlined />} onClick={() => handleReconcile(record)}>
               對帳
             </Button>
           )}
           {record.is_reconciled && (
-            <Button 
-              type="link" 
-              icon={<CloseCircleOutlined />}
-              onClick={() => handleUnreconcile(record)}
-            >
+            <Button type="link" icon={<CloseCircleOutlined />} onClick={() => handleUnreconcile(record)}>
               取消對帳
             </Button>
           )}
-          <Button 
-            type="link" 
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(record)}
-          >
+          <Button type="link" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
             編輯
           </Button>
-          <Popconfirm
-            title="確定要刪除嗎？"
-            onConfirm={() => handleDelete(record.id)}
-          >
-            <Button type="link" danger icon={<DeleteOutlined />}>
-              刪除
-            </Button>
+          <Popconfirm title="確定要刪除這筆資料嗎？" onConfirm={() => handleDelete(record.id)}>
+            <Button type="link" danger icon={<DeleteOutlined />}>刪除</Button>
           </Popconfirm>
         </Space>
-      ),
-    },
+      )
+    }
   ]
 
   const handleAdd = () => {
@@ -180,21 +207,7 @@ function BankLedger() {
 
   const handleEdit = (record) => {
     setEditingRecord(record)
-    form.resetFields()
-    const formValues = {
-      ...record,
-      txn_date: dayjs(record.txn_date),
-      transaction_type: record.income > 0 ? 'income' : 'expense',
-      amount: record.income > 0 ? record.income : record.expense
-    }
-    form.setFieldsValue(formValues)
     setIsModalOpen(true)
-  }
-
-  const handleCancel = () => {
-    setIsModalOpen(false)
-    setEditingRecord(null)
-    form.resetFields()
   }
 
   const handleDelete = async (id) => {
@@ -243,21 +256,16 @@ function BankLedger() {
     setReconcilingRecord(record)
     setReconcileLoading(true)
     try {
-      // 根據記錄類型載入可對帳的資料
       if (record.income > 0) {
-        // 收入對帳：載入應收帳款
         const receivables = await getReconcilableReceivables()
         setReconcilableReceivables(receivables)
         setReconcilableServiceExpenses([])
+        reconcileForm.setFieldsValue({ lines: [{ fee_amount: 0 }] })
       } else if (record.expense > 0) {
-        // 支出對帳：載入服務費用
         const expenses = await getReconcilableServiceExpenses()
         setReconcilableServiceExpenses(expenses)
         setReconcilableReceivables([])
-      }
-      reconcileForm.resetFields()
-      if (record.income > 0) {
-        reconcileForm.setFieldsValue({ fee_amount: 0 })
+        reconcileForm.setFieldsValue({ lines: [{}] })
       }
       setIsReconcileModalOpen(true)
     } catch (error) {
@@ -280,30 +288,34 @@ function BankLedger() {
   const handleReconcileSubmit = async () => {
     try {
       const values = await reconcileForm.validateFields()
-      const reconcileData = {
-        reconcile_type: reconcilingRecord.income > 0 ? 'receivable' : 'service_expense',
-        auto_update: true
-      }
-
-      if (reconcilingRecord.income > 0) {
-        // 收入對帳
-        const selectedReceivable = reconcilableReceivables.find(r => r.id === values.receivable_id)
-        if (!selectedReceivable) {
-          message.error('請選擇應收帳款')
-          return
+      const isIncome = reconcilingRecord.income > 0
+      const lines = (values.lines || []).map((line) => {
+        if (isIncome) {
+          const selected = reconcilableReceivables.find((item) => item.id === line.target_id)
+          return {
+            target_id: line.target_id,
+            allocated_amount: line.allocated_amount,
+            fee_amount: line.fee_amount || 0,
+            ar_type: selected?.type === '租賃' ? 'leasing' : 'buyout'
+          }
         }
-        reconcileData.ar_id = values.receivable_id
-        reconcileData.ar_type = selectedReceivable.type === '租賃' ? 'leasing' : 'buyout'
-        reconcileData.fee_amount = values.fee_amount || 0
-      } else {
-        // 支出對帳
-        reconcileData.service_expense_id = values.service_expense_id
-      }
+        return {
+          target_id: line.target_id,
+          allocated_amount: line.allocated_amount
+        }
+      })
 
-      await reconcileBankLedger(reconcilingRecord.id, reconcileData)
+      await reconcileBankLedger(reconcilingRecord.id, {
+        reconcile_type: isIncome ? 'receivable' : 'service_expense',
+        auto_update: true,
+        lines
+      })
+
       message.success('對帳成功')
       setIsReconcileModalOpen(false)
       setReconcilingRecord(null)
+      setReconcilableReceivables([])
+      setReconcilableServiceExpenses([])
       reconcileForm.resetFields()
       loadData()
     } catch (error) {
@@ -328,104 +340,64 @@ function BankLedger() {
     <div style={{ padding: 24 }}>
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Space>
-          <RangePicker
-            value={dateRange}
-            onChange={setDateRange}
-            format="YYYY-MM-DD"
-          />
+          <RangePicker value={dateRange} onChange={setDateRange} format="YYYY-MM-DD" />
           <Input
-            placeholder="🔍 搜尋"
+            placeholder="搜尋關鍵字"
             prefix={<SearchOutlined />}
             value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
+            onChange={(event) => setSearchText(event.target.value)}
             style={{ width: 300 }}
             allowClear
           />
         </Space>
         <Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
-            新增記錄
-          </Button>
-          <Button icon={<DownloadOutlined />} onClick={handleExport}>
-            匯出 Excel
-          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增資料</Button>
+          <Button icon={<DownloadOutlined />} onClick={handleExport}>匯出 Excel</Button>
         </Space>
       </Space>
 
-      <Space style={{ marginBottom: 16, padding: '12px', background: '#f0f0f0', borderRadius: 4 }}>
-        <span><strong>總收入：</strong>NT$ {totalIncome.toLocaleString()}</span>
-        <span><strong>總支出：</strong>NT$ {totalExpense.toLocaleString()}</span>
-        <span><strong>淨額：</strong>NT$ {netAmount.toLocaleString()}</span>
+      <Space style={{ marginBottom: 16, padding: 12, background: '#f0f0f0', borderRadius: 4 }}>
+        <span><strong>總收入：</strong>{formatMoney(totalIncome)}</span>
+        <span><strong>總支出：</strong>{formatMoney(totalExpense)}</span>
+        <span><strong>淨額：</strong>{formatMoney(netAmount)}</span>
       </Space>
 
-      <Table
-        columns={columns}
-        dataSource={dataSource}
-        rowKey="id"
-        loading={loading}
-        scroll={{ x: 1200 }}
-        pagination={{ pageSize: 10, showSizeChanger: true }}
-      />
+      <Table columns={columns} dataSource={dataSource} rowKey="id" loading={loading} scroll={{ x: 1500 }} />
 
       <Modal
-        title={editingRecord ? '編輯帳本記錄' : '新增帳本記錄'}
+        title={editingRecord ? '編輯銀行帳本' : '新增銀行帳本'}
         open={isModalOpen}
         onOk={handleSubmit}
-        onCancel={handleCancel}
+        onCancel={() => {
+          setIsModalOpen(false)
+          setEditingRecord(null)
+          form.resetFields()
+        }}
         width={600}
-        okText="確定"
+        okText="儲存"
         cancelText="取消"
         destroyOnClose
       >
-        <Form
-          key={editingRecord ? editingRecord.id : 'new'}
-          form={form}
-          layout="vertical"
-        >
-          <Form.Item
-            label="日期"
-            name="txn_date"
-            rules={[{ required: true, message: '請選擇日期' }]}
-          >
+        <Form form={form} layout="vertical">
+          <Form.Item label="日期" name="txn_date" rules={[{ required: true, message: '請選擇日期' }]}>
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
-
-          <Form.Item
-            label="匯款人"
-            name="payer"
-          >
+          <Form.Item label="對象" name="payer">
             <Input />
           </Form.Item>
-
-          <Form.Item
-            label="交易類型"
-            name="transaction_type"
-            rules={[{ required: true, message: '請選擇交易類型' }]}
-          >
+          <Form.Item label="交易類型" name="transaction_type" rules={[{ required: true, message: '請選擇交易類型' }]}>
             <Radio.Group>
               <Radio value="income">收入</Radio>
               <Radio value="expense">支出</Radio>
             </Radio.Group>
           </Form.Item>
-
-          <Form.Item
-            noStyle
-            shouldUpdate={(prevValues, currentValues) => prevValues.transaction_type !== currentValues.transaction_type}
-          >
-            {({ getFieldValue }) => {
-              const transactionType = getFieldValue('transaction_type')
-              return (
-                <Form.Item
-                  label={transactionType === 'income' ? '收入金額' : '支出金額'}
-                  name="amount"
-                  rules={[{ required: true, message: '請輸入金額' }]}
-                >
-                  <InputNumber min={0} step={100} style={{ width: '100%' }} />
-                </Form.Item>
-              )
-            }}
+          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.transaction_type !== curr.transaction_type}>
+            {({ getFieldValue }) => (
+              <Form.Item label={getFieldValue('transaction_type') === 'income' ? '收入金額' : '支出金額'} name="amount" rules={[{ required: true, message: '請輸入金額' }]}>
+                <InputNumber min={0} step={100} style={{ width: '100%' }} />
+              </Form.Item>
+            )}
           </Form.Item>
-
           <Form.Item label="備註" name="note">
             <TextArea rows={3} />
           </Form.Item>
@@ -437,8 +409,8 @@ function BankLedger() {
         open={isReconcileModalOpen}
         onOk={handleReconcileSubmit}
         onCancel={handleReconcileCancel}
-        width={800}
-        okText="確定對帳"
+        width={960}
+        okText="儲存對帳"
         cancelText="取消"
         destroyOnClose
         confirmLoading={reconcileLoading}
@@ -446,106 +418,103 @@ function BankLedger() {
         {reconcilingRecord && (
           <div style={{ marginBottom: 16, padding: 12, background: '#f0f0f0', borderRadius: 4 }}>
             <p><strong>日期：</strong>{reconcilingRecord.txn_date}</p>
-            <p><strong>匯款人：</strong>{reconcilingRecord.payer || '-'}</p>
-            <p><strong>金額：</strong>
-              {reconcilingRecord.income > 0 
-                ? `收入 NT$ ${reconcilingRecord.income.toLocaleString()}`
-                : `支出 NT$ ${reconcilingRecord.expense.toLocaleString()}`
-              }
-            </p>
+            <p><strong>對象：</strong>{reconcilingRecord.payer || '-'}</p>
+            <p><strong>流水金額：</strong>{formatMoney(ledgerAmount)}</p>
+            <p><strong>已分攤：</strong>{formatMoney(allocatedTotal)} / <strong>剩餘：</strong>{formatMoney(remainingAmount)}</p>
             <p><strong>備註：</strong>{reconcilingRecord.note || '-'}</p>
           </div>
         )}
 
-          <Form
-            form={reconcileForm}
-            layout="vertical"
-          >
-            {reconcilingRecord?.income > 0 && (
+        <Form form={reconcileForm} layout="vertical" initialValues={{ lines: [{}] }}>
+          <Form.List name="lines">
+            {(fields, { add, remove }) => (
               <>
-                <Form.Item
-                  label="選擇應收帳款"
-                  name="receivable_id"
-                  rules={[{ required: true, message: '請選擇應收帳款' }]}
-                >
-                  <Select
-                    placeholder="請選擇應收帳款"
-                    showSearch
-                    filterOption={(input, option) =>
-                      (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                    }
-                    loading={reconcileLoading}
-                  >
-                    {reconcilableReceivables.map(ar => (
-                      <Select.Option 
-                        key={ar.id} 
-                        value={ar.id}
-                        label={`${ar.contract_code} - ${ar.customer_name} (${ar.type}) | 收款期間：${formatReceivablePeriod(ar)}`}
+                {fields.map((field, index) => (
+                  <div key={field.key} style={{ marginBottom: 12, padding: 12, border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                    <Space align="start" style={{ display: 'flex' }}>
+                      <Form.Item
+                        {...field}
+                        label={reconcilingRecord?.income > 0 ? '應收帳款' : '支出項目'}
+                        name={[field.name, 'target_id']}
+                        rules={[{ required: true, message: '請選擇項目' }]}
+                        style={{ width: 420 }}
                       >
-                        <div>
-                          <div><strong>{ar.contract_code}</strong> - {ar.customer_name} <Tag color={ar.type === '租賃' ? 'blue' : 'green'}>{ar.type}</Tag></div>
-                          <div style={{ fontSize: '12px', color: '#666' }}>
-                            收款期間：{formatReceivablePeriod(ar)} |
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#666' }}>
-                            應收：NT$ {ar.amount.toLocaleString()} + 手續費：NT$ {ar.fee.toLocaleString()} = NT$ {(ar.amount + ar.fee).toLocaleString()} | 
-                            已收：NT$ {ar.received_amount.toLocaleString()} | 
-                            未收：NT$ {ar.unpaid_amount.toLocaleString()} | 
-                            狀態：<Tag color={ar.payment_status === '未收' ? 'red' : ar.payment_status === '部分收款' ? 'orange' : 'green'}>{ar.payment_status}</Tag>
-                          </div>
-                        </div>
-                      </Select.Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-                <Form.Item
-                  label="手續費"
-                  name="fee_amount"
-                  tooltip="若本次對帳有額外手續費，會累加到這筆應收帳款，取消對帳時也會一併還原"
-                >
-                  <InputNumber
-                    min={0}
-                    step={1}
-                    style={{ width: '100%' }}
-                    addonBefore="NT$"
-                    placeholder="沒有可填 0"
-                  />
-                </Form.Item>
+                        <Select
+                          placeholder={reconcilingRecord?.income > 0 ? '選擇應收帳款' : '選擇支出項目'}
+                          showSearch
+                          filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                          options={
+                            reconcilingRecord?.income > 0
+                              ? reconcilableReceivables.map((item) => ({
+                                  value: item.id,
+                                  label: getReceivableOptionLabel(item),
+                                  children: (
+                                    <div>
+                                      <div>
+                                        <strong>{item.contract_code}</strong> - {item.customer_name} <Tag color={item.type === '租賃' ? 'blue' : 'green'}>{item.type}</Tag>
+                                      </div>
+                                      <div style={{ fontSize: 12, color: '#666' }}>
+                                        收款期間：{formatReceivablePeriod(item)} | 未收 {formatMoney(item.unpaid_amount)}
+                                      </div>
+                                    </div>
+                                  )
+                                }))
+                              : reconcilableServiceExpenses.map((item) => ({
+                                  value: item.id,
+                                  label: getExpenseOptionLabel(item),
+                                  children: (
+                                    <div>
+                                      <div>
+                                        <strong>{item.contract_code || '無合約'}</strong> - {item.customer_name || '未綁定客戶'} <Tag color={item.expense_source === 'extra' ? 'purple' : 'blue'}>{item.expense_source === 'extra' ? (item.expense_category || '額外開銷') : item.service_type}</Tag>
+                                      </div>
+                                      <div style={{ fontSize: 12, color: '#666' }}>
+                                        未付 {formatMoney(item.unpaid_amount)}
+                                        {item.expense_description ? ` | ${item.expense_description}` : ''}
+                                      </div>
+                                    </div>
+                                  )
+                                }))
+                          }
+                          optionRender={(option) => option.data.children}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        {...field}
+                        label="分攤金額"
+                        name={[field.name, 'allocated_amount']}
+                        rules={[{ required: true, message: '請輸入金額' }]}
+                        style={{ width: 180 }}
+                      >
+                        <InputNumber min={0.01} step={100} style={{ width: '100%' }} addonBefore="NT$" />
+                      </Form.Item>
+                      {reconcilingRecord?.income > 0 && (
+                        <Form.Item
+                          {...field}
+                          label="手續費"
+                          name={[field.name, 'fee_amount']}
+                          style={{ width: 160 }}
+                        >
+                          <InputNumber min={0} step={1} style={{ width: '100%' }} addonBefore="NT$" />
+                        </Form.Item>
+                      )}
+                      <Button
+                        danger
+                        type="text"
+                        icon={<MinusCircleOutlined />}
+                        onClick={() => remove(field.name)}
+                        disabled={fields.length === 1}
+                        style={{ marginTop: 30 }}
+                      />
+                    </Space>
+                    {index < fields.length - 1 && <Divider style={{ margin: '12px 0 0' }} />}
+                  </div>
+                ))}
+                <Button type="dashed" icon={<PlusOutlined />} onClick={() => add(reconcilingRecord?.income > 0 ? { fee_amount: 0 } : {})} block>
+                  新增分攤
+                </Button>
               </>
             )}
-
-          {reconcilingRecord?.expense > 0 && (
-            <Form.Item
-              label="選擇服務費用"
-              name="service_expense_id"
-              rules={[{ required: true, message: '請選擇服務費用' }]}
-            >
-              <Select
-                placeholder="請選擇服務費用"
-                showSearch
-                filterOption={(input, option) =>
-                  (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                }
-                loading={reconcileLoading}
-              >
-                {reconcilableServiceExpenses.map(se => (
-                  <Select.Option 
-                    key={se.id} 
-                    value={se.id}
-                    label={`${se.contract_code} - ${se.customer_name} (${se.service_type})`}
-                  >
-                    <div>
-                      <div><strong>{se.contract_code}</strong> - {se.customer_name} <Tag color={se.service_type === '業務' ? 'blue' : 'purple'}>{se.service_type}</Tag></div>
-                      <div style={{ fontSize: '12px', color: '#666' }}>
-                        金額：NT$ {se.total_amount.toLocaleString()} | 
-                        狀態：<Tag color={se.payment_status === '未收' ? 'red' : se.payment_status === '部分收款' ? 'orange' : 'green'}>{se.payment_status}</Tag>
-                      </div>
-                    </div>
-                  </Select.Option>
-                ))}
-              </Select>
-            </Form.Item>
-          )}
+          </Form.List>
         </Form>
       </Modal>
     </div>

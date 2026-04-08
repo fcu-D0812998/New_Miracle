@@ -1,38 +1,49 @@
-import { useState, useEffect } from 'react'
-import { 
-  Tabs, 
-  Table, 
-  DatePicker, 
-  Space, 
-  Button, 
-  Alert,
+import { useEffect, useMemo, useState } from 'react'
+import {
+  Tabs,
+  Table,
+  DatePicker,
+  Space,
+  Button,
   Input,
   Select,
   Form,
-  Row,
-  Col
+  Modal,
+  InputNumber,
+  message,
+  Tag
 } from 'antd'
-import { DownloadOutlined, SearchOutlined } from '@ant-design/icons'
+import { DownloadOutlined, EditOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
-import { getReceivables, getUnpaidPayables, getPaidPayables, getServiceExpenses } from '../services/api'
+import {
+  getReceivables,
+  updateReceivableAmount,
+  getUnpaidPayables,
+  getPaidPayables,
+  getServiceExpenses,
+  updateServiceExpenseAmount,
+  createExtraExpense
+} from '../services/api'
 
 const { RangePicker } = DatePicker
 
-const ReceivablesSearchForm = ({ filters, onSearch }) => {
+const ReceivablesSearchForm = ({ onSearch }) => {
   const [form] = Form.useForm()
+
   const handleSearch = () => {
     const values = form.getFieldsValue()
-    const searchFilters = {}
-    if (values.contract_code) searchFilters.contract_code = values.contract_code
-    if (values.customer_code) searchFilters.customer_code = values.customer_code
-    if (values.customer_name) searchFilters.customer_name = values.customer_name
-    if (values.dateRange && values.dateRange[0]) searchFilters.from_date = values.dateRange[0].format('YYYY-MM-DD')
-    if (values.dateRange && values.dateRange[1]) searchFilters.to_date = values.dateRange[1].format('YYYY-MM-DD')
-    if (values.payment_status) searchFilters.payment_status = values.payment_status
-    if (values.type) searchFilters.type = values.type
-    onSearch(searchFilters)
+    const filters = {}
+    if (values.contract_code) filters.contract_code = values.contract_code
+    if (values.customer_code) filters.customer_code = values.customer_code
+    if (values.customer_name) filters.customer_name = values.customer_name
+    if (values.dateRange?.[0]) filters.from_date = values.dateRange[0].format('YYYY-MM-DD')
+    if (values.dateRange?.[1]) filters.to_date = values.dateRange[1].format('YYYY-MM-DD')
+    if (values.payment_status) filters.payment_status = values.payment_status
+    if (values.type) filters.type = values.type
+    onSearch(filters)
   }
+
   return (
     <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
       <Form.Item label="合約編號" name="contract_code">
@@ -70,21 +81,23 @@ const ReceivablesSearchForm = ({ filters, onSearch }) => {
   )
 }
 
-const PayablesSearchForm = ({ filters, onSearch }) => {
+const PayablesSearchForm = ({ onSearch }) => {
   const [form] = Form.useForm()
+
   const handleSearch = () => {
     const values = form.getFieldsValue()
-    const searchFilters = {}
-    if (values.contract_code) searchFilters.contract_code = values.contract_code
-    if (values.customer_code) searchFilters.customer_code = values.customer_code
-    if (values.customer_name) searchFilters.customer_name = values.customer_name
-    if (values.dateRange && values.dateRange[0]) searchFilters.from_date = values.dateRange[0].format('YYYY-MM-DD')
-    if (values.dateRange && values.dateRange[1]) searchFilters.to_date = values.dateRange[1].format('YYYY-MM-DD')
-    if (values.payment_status) searchFilters.payment_status = values.payment_status
-    if (values.payable_type) searchFilters.payable_type = values.payable_type
-    if (values.contract_type) searchFilters.contract_type = values.contract_type
-    onSearch(searchFilters)
+    const filters = {}
+    if (values.contract_code) filters.contract_code = values.contract_code
+    if (values.customer_code) filters.customer_code = values.customer_code
+    if (values.customer_name) filters.customer_name = values.customer_name
+    if (values.dateRange?.[0]) filters.from_date = values.dateRange[0].format('YYYY-MM-DD')
+    if (values.dateRange?.[1]) filters.to_date = values.dateRange[1].format('YYYY-MM-DD')
+    if (values.payment_status) filters.payment_status = values.payment_status
+    if (values.payable_type) filters.payable_type = values.payable_type
+    if (values.contract_type) filters.contract_type = values.contract_type
+    onSearch(filters)
   }
+
   return (
     <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
       <Form.Item label="合約編號" name="contract_code">
@@ -99,21 +112,24 @@ const PayablesSearchForm = ({ filters, onSearch }) => {
       <Form.Item label="日期範圍" name="dateRange">
         <RangePicker format="YYYY-MM-DD" />
       </Form.Item>
-      <Form.Item label="付款對象" name="payable_type">
-        <Select placeholder="全部" style={{ width: 100 }} allowClear>
+      <Form.Item label="應付類型" name="payable_type">
+        <Select placeholder="全部" style={{ width: 130 }} allowClear>
           <Select.Option value="業務">業務</Select.Option>
           <Select.Option value="維護">維護</Select.Option>
+          <Select.Option value="額外開銷">額外開銷</Select.Option>
         </Select>
       </Form.Item>
       <Form.Item label="合約類型" name="contract_type">
-        <Select placeholder="全部" style={{ width: 100 }} allowClear>
+        <Select placeholder="全部" style={{ width: 130 }} allowClear>
           <Select.Option value="租賃">租賃</Select.Option>
           <Select.Option value="買斷">買斷</Select.Option>
+          <Select.Option value="額外開銷">額外開銷</Select.Option>
         </Select>
       </Form.Item>
       <Form.Item label="付款狀況" name="payment_status">
         <Select placeholder="全部" style={{ width: 120 }} allowClear>
           <Select.Option value="未付款">未付款</Select.Option>
+          <Select.Option value="部分付款">部分付款</Select.Option>
           <Select.Option value="已付款">已付款</Select.Option>
         </Select>
       </Form.Item>
@@ -127,20 +143,22 @@ const PayablesSearchForm = ({ filters, onSearch }) => {
   )
 }
 
-const ServiceSearchForm = ({ filters, onSearch }) => {
+const ServiceSearchForm = ({ onSearch }) => {
   const [form] = Form.useForm()
+
   const handleSearch = () => {
     const values = form.getFieldsValue()
-    const searchFilters = {}
-    if (values.contract_code) searchFilters.contract_code = values.contract_code
-    if (values.customer_code) searchFilters.customer_code = values.customer_code
-    if (values.customer_name) searchFilters.customer_name = values.customer_name
-    if (values.dateRange && values.dateRange[0]) searchFilters.from_date = values.dateRange[0].format('YYYY-MM-DD')
-    if (values.dateRange && values.dateRange[1]) searchFilters.to_date = values.dateRange[1].format('YYYY-MM-DD')
-    if (values.payment_status) searchFilters.payment_status = values.payment_status
-    if (values.service_type) searchFilters.service_type = values.service_type
-    onSearch(searchFilters)
+    const filters = {}
+    if (values.contract_code) filters.contract_code = values.contract_code
+    if (values.customer_code) filters.customer_code = values.customer_code
+    if (values.customer_name) filters.customer_name = values.customer_name
+    if (values.dateRange?.[0]) filters.from_date = values.dateRange[0].format('YYYY-MM-DD')
+    if (values.dateRange?.[1]) filters.to_date = values.dateRange[1].format('YYYY-MM-DD')
+    if (values.payment_status) filters.payment_status = values.payment_status
+    if (values.service_type) filters.service_type = values.service_type
+    onSearch(filters)
   }
+
   return (
     <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
       <Form.Item label="合約編號" name="contract_code">
@@ -152,17 +170,17 @@ const ServiceSearchForm = ({ filters, onSearch }) => {
       <Form.Item label="客戶名稱" name="customer_name">
         <Input placeholder="部分比對" style={{ width: 150 }} allowClear />
       </Form.Item>
-      <Form.Item label="服務日期範圍" name="dateRange">
+      <Form.Item label="日期範圍" name="dateRange">
         <RangePicker format="YYYY-MM-DD" />
       </Form.Item>
       <Form.Item label="服務類型" name="service_type">
         <Input placeholder="部分比對" style={{ width: 150 }} allowClear />
       </Form.Item>
-      <Form.Item label="繳費狀況" name="payment_status">
+      <Form.Item label="付款狀況" name="payment_status">
         <Select placeholder="全部" style={{ width: 120 }} allowClear>
-          <Select.Option value="未收">未收</Select.Option>
-          <Select.Option value="部分收款">部分收款</Select.Option>
-          <Select.Option value="已收款">已收款</Select.Option>
+          <Select.Option value="未付款">未付款</Select.Option>
+          <Select.Option value="部分付款">部分付款</Select.Option>
+          <Select.Option value="已付款">已付款</Select.Option>
         </Select>
       </Form.Item>
       <Form.Item>
@@ -175,6 +193,8 @@ const ServiceSearchForm = ({ filters, onSearch }) => {
   )
 }
 
+const formatMoney = (value) => `NT$ ${Number(value || 0).toLocaleString()}`
+
 function Accounts() {
   const [activeTab, setActiveTab] = useState('receivables')
   const [receivablesData, setReceivablesData] = useState([])
@@ -183,302 +203,250 @@ function Accounts() {
   const [serviceExpenseData, setServiceExpenseData] = useState([])
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [alertMessage, setAlertMessage] = useState(null)
-  const [alertType, setAlertType] = useState('info')
-  
-  // 搜尋條件
   const [receivablesFilters, setReceivablesFilters] = useState({})
   const [payablesFilters, setPayablesFilters] = useState({})
   const [serviceFilters, setServiceFilters] = useState({})
+  const [isAmountModalOpen, setIsAmountModalOpen] = useState(false)
+  const [editingAmountTarget, setEditingAmountTarget] = useState(null)
+  const [isExtraExpenseModalOpen, setIsExtraExpenseModalOpen] = useState(false)
+  const [amountForm] = Form.useForm()
+  const [extraExpenseForm] = Form.useForm()
 
-  const loadReceivables = async () => {
+  const currentExportMeta = useMemo(() => ({
+    receivables: { fileName: '應收帳款', sheetName: '應收帳款', data: receivablesData },
+    'unpaid-payable': { fileName: '未出帳款', sheetName: '未出帳款', data: unpaidPayableData },
+    'paid-payable': { fileName: '已出帳款', sheetName: '已出帳款', data: paidPayableData },
+    service: { fileName: '服務費用', sheetName: '服務費用', data: serviceExpenseData }
+  }), [receivablesData, unpaidPayableData, paidPayableData, serviceExpenseData])
+
+  const loadCurrentTab = async () => {
     setLoading(true)
     try {
-      const data = await getReceivables(receivablesFilters)
-      setReceivablesData(data || [])
+      if (activeTab === 'receivables') {
+        setReceivablesData(await getReceivables(receivablesFilters))
+      } else if (activeTab === 'unpaid-payable') {
+        setUnpaidPayableData(await getUnpaidPayables(payablesFilters))
+      } else if (activeTab === 'paid-payable') {
+        setPaidPayableData(await getPaidPayables(payablesFilters))
+      } else if (activeTab === 'service') {
+        setServiceExpenseData(await getServiceExpenses(serviceFilters))
+      }
     } catch (error) {
-      console.error('載入總應收帳款失敗', error)
-      setReceivablesData([])
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const loadUnpaidPayables = async () => {
-    setLoading(true)
-    try {
-      const data = await getUnpaidPayables(payablesFilters)
-      setUnpaidPayableData(data || [])
-    } catch (error) {
-      console.error('載入未出帳款失敗', error)
-      setUnpaidPayableData([])
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const loadPaidPayables = async () => {
-    setLoading(true)
-    try {
-      const data = await getPaidPayables(payablesFilters)
-      setPaidPayableData(data || [])
-    } catch (error) {
-      console.error('載入已出帳款失敗', error)
-      setPaidPayableData([])
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const loadServiceExpenses = async () => {
-    setLoading(true)
-    try {
-      const data = await getServiceExpenses(serviceFilters)
-      setServiceExpenseData(data || [])
-    } catch (error) {
-      console.error('載入服務費用失敗', error)
-      setServiceExpenseData([])
+      message.error('載入資料失敗：' + (error.response?.data?.detail || error.message))
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    if (activeTab === 'receivables') {
-      loadReceivables()
-    }
-  }, [activeTab, receivablesFilters])
+    loadCurrentTab()
+  }, [activeTab, receivablesFilters, payablesFilters, serviceFilters])
 
-  useEffect(() => {
-    if (activeTab === 'unpaid-payable') {
-      loadUnpaidPayables()
-    } else if (activeTab === 'paid-payable') {
-      loadPaidPayables()
-    }
-  }, [activeTab, payablesFilters])
+  const renderAdjustedAmount = (_, record) => {
+    const hasAdjustment = record.adjusted_amount !== null && record.adjusted_amount !== undefined
+    return (
+      <div>
+        <div>{formatMoney(record.amount)}</div>
+        {hasAdjustment && (
+          <div style={{ fontSize: 12, color: '#666' }}>
+            原始 {formatMoney(record.original_amount)} <Tag color="orange">已調整</Tag>
+          </div>
+        )}
+      </div>
+    )
+  }
 
-  useEffect(() => {
-    if (activeTab === 'service') {
-      loadServiceExpenses()
-    }
-  }, [activeTab, serviceFilters])
+  const openAmountModal = (kind, record) => {
+    setEditingAmountTarget({ kind, record })
+    amountForm.setFieldsValue({ amount: record.amount })
+    setIsAmountModalOpen(true)
+  }
 
-  useEffect(() => {
-    loadReceivables()
-  }, [])
+  const handleAmountSubmit = async () => {
+    try {
+      const values = await amountForm.validateFields()
+      if (editingAmountTarget?.kind === 'receivable') {
+        await updateReceivableAmount(editingAmountTarget.record.type, editingAmountTarget.record.id, values)
+      } else {
+        await updateServiceExpenseAmount(editingAmountTarget.record.id, values)
+      }
+      message.success('金額更新成功')
+      setIsAmountModalOpen(false)
+      setEditingAmountTarget(null)
+      amountForm.resetFields()
+      loadCurrentTab()
+    } catch (error) {
+      if (error.errorFields) return
+      message.error('更新失敗：' + (error.response?.data?.detail || error.message))
+    }
+  }
+
+  const handleExtraExpenseSubmit = async () => {
+    try {
+      const values = await extraExpenseForm.validateFields()
+      await createExtraExpense({
+        ...values,
+        service_date: values.service_date.format('YYYY-MM-DD')
+      })
+      message.success('額外開銷已新增')
+      setIsExtraExpenseModalOpen(false)
+      extraExpenseForm.resetFields()
+      if (activeTab === 'paid-payable') {
+        setActiveTab('unpaid-payable')
+      } else {
+        loadCurrentTab()
+      }
+    } catch (error) {
+      if (error.errorFields) return
+      message.error('新增失敗：' + (error.response?.data?.detail || error.message))
+    }
+  }
+
+  const handleExportCurrentTab = () => {
+    const meta = currentExportMeta[activeTab]
+    if (!meta?.data?.length) {
+      message.warning('目前頁籤沒有資料可匯出')
+      return
+    }
+
+    setExporting(true)
+    try {
+      const exportRows = meta.data.map((item) => {
+        if (activeTab === 'receivables') {
+          return {
+            類型: item.type,
+            合約編號: item.contract_code,
+            客戶代碼: item.customer_code,
+            客戶名稱: item.customer_name,
+            起日: item.date,
+            迄日: item.end_date || '',
+            原始金額: item.original_amount,
+            最終金額: item.amount,
+            手續費: item.fee,
+            已收金額: item.received_amount,
+            繳費狀況: item.payment_status
+          }
+        }
+
+        if (activeTab === 'service') {
+          return {
+            合約編號: item.contract_code,
+            客戶代碼: item.customer_code,
+            客戶名稱: item.customer_name,
+            服務日期: item.service_date || '',
+            服務類型: item.service_type,
+            公司代碼: item.repair_company_code || '',
+            原始金額: item.original_amount,
+            最終金額: item.amount,
+            已付金額: item.paid_amount,
+            付款狀況: item.payment_status
+          }
+        }
+
+        return {
+          日期: item.date || '',
+          合約編號: item.contract_code || '',
+          合約類型: item.contract_type || '',
+          客戶代碼: item.customer_code || '',
+          客戶名稱: item.customer_name || '',
+          應付類型: item.payable_type || '',
+          公司或對象: item.company_code || '',
+          說明: item.description || '',
+          原始金額: item.original_amount,
+          最終金額: item.amount,
+          已付金額: item.paid_amount,
+          未付金額: item.unpaid_amount,
+          付款狀況: item.payment_status
+        }
+      })
+
+      const workbook = XLSX.utils.book_new()
+      const worksheet = XLSX.utils.json_to_sheet(exportRows)
+      XLSX.utils.book_append_sheet(workbook, worksheet, meta.sheetName)
+      XLSX.writeFile(workbook, `${meta.fileName}_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`)
+      message.success('匯出成功')
+    } catch (error) {
+      message.error('匯出失敗：' + (error.message || '無法建立 Excel'))
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const receivablesColumns = [
     { title: '類型', dataIndex: 'type', key: 'type', width: 80 },
     { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120 },
     { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120 },
     { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150 },
-    { title: '日期', dataIndex: 'date', key: 'date', width: 100 },
-    { title: '結束日期', dataIndex: 'end_date', key: 'end_date', width: 100 },
-    { title: '金額', dataIndex: 'amount', key: 'amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
-    { title: '手續費', dataIndex: 'fee', key: 'fee', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString() || 0}` : '-' },
-    { title: '已收金額', dataIndex: 'received_amount', key: 'received_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString() || 0}` : '-' },
-    { title: '繳費狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120 }
+    { title: '起日', dataIndex: 'date', key: 'date', width: 110 },
+    { title: '迄日', dataIndex: 'end_date', key: 'end_date', width: 110, render: (value) => value || '-' },
+    { title: '金額', key: 'amount', width: 180, render: renderAdjustedAmount },
+    { title: '手續費', dataIndex: 'fee', key: 'fee', width: 120, render: (value) => formatMoney(value) },
+    { title: '已收金額', dataIndex: 'received_amount', key: 'received_amount', width: 120, render: (value) => formatMoney(value) },
+    { title: '繳費狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120 },
+    {
+      title: '操作',
+      key: 'action',
+      width: 120,
+      fixed: 'right',
+      render: (_, record) => (
+        <Button type="link" icon={<EditOutlined />} onClick={() => openAmountModal('receivable', record)}>
+          編輯金額
+        </Button>
+      )
+    }
   ]
 
   const payableColumns = [
-    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120 },
-    { title: '類型', dataIndex: 'contract_type', key: 'contract_type', width: 80 },
-    { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120 },
-    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150 },
-    { title: '日期', dataIndex: 'date', key: 'date', width: 100 },
-    { title: '付款對象', dataIndex: 'payable_type', key: 'payable_type', width: 100 },
-    { title: '公司代碼', dataIndex: 'company_code', key: 'company_code', width: 120 },
-    { title: '金額', dataIndex: 'amount', key: 'amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
+    { title: '日期', dataIndex: 'date', key: 'date', width: 110, render: (value) => value || '-' },
+    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120, render: (value) => value || '-' },
+    { title: '合約類型', dataIndex: 'contract_type', key: 'contract_type', width: 110, render: (value) => value || '-' },
+    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150, render: (value) => value || '-' },
+    { title: '應付類型', dataIndex: 'payable_type', key: 'payable_type', width: 130 },
+    { title: '公司或對象', dataIndex: 'company_code', key: 'company_code', width: 140, render: (value) => value || '-' },
+    { title: '說明', dataIndex: 'description', key: 'description', width: 220, render: (value) => value || '-' },
+    { title: '金額', key: 'amount', width: 180, render: renderAdjustedAmount },
+    { title: '已付金額', dataIndex: 'paid_amount', key: 'paid_amount', width: 120, render: (value) => formatMoney(value) },
+    { title: '未付金額', dataIndex: 'unpaid_amount', key: 'unpaid_amount', width: 120, render: (value) => formatMoney(value) },
     { title: '付款狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120 }
   ]
 
   const serviceColumns = [
     { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120 },
-    { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120 },
     { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150 },
-    { title: '服務日期', dataIndex: 'service_date', key: 'service_date', width: 100 },
-    { title: '確認日期', dataIndex: 'confirm_date', key: 'confirm_date', width: 100 },
+    { title: '服務日期', dataIndex: 'service_date', key: 'service_date', width: 110, render: (value) => value || '-' },
     { title: '服務類型', dataIndex: 'service_type', key: 'service_type', width: 100 },
-    { title: '維修公司代碼', dataIndex: 'repair_company_code', key: 'repair_company_code', width: 150 },
-    { title: '總金額', dataIndex: 'total_amount', key: 'total_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
-    { title: '繳費狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120 }
-  ]
-
-  const handleExport = async () => {
-    setExporting(true)
-    try {
-      // 使用當前搜尋條件取得資料
-      const [receivables, unpaid, paid, service] = await Promise.all([
-        getReceivables(receivablesFilters).catch(() => []),
-        getUnpaidPayables(payablesFilters).catch(() => []),
-        getPaidPayables(payablesFilters).catch(() => []),
-        getServiceExpenses(serviceFilters).catch(() => [])
-      ])
-
-      // 準備應收帳款資料
-      const receivablesSheet = receivables.map(item => ({
-        '類型': item.type || '',
-        '合約編號': item.contract_code || '',
-        '客戶代碼': item.customer_code || '',
-        '客戶名稱': item.customer_name || '',
-        '日期': item.date || '',
-        '結束日期': item.end_date || '',
-        '金額': item.amount || 0,
-        '手續費': item.fee || 0,
-        '已收金額': item.received_amount || 0,
-        '應收總額': (item.amount || 0) + (item.fee || 0),
-        '未收金額': ((item.amount || 0) + (item.fee || 0)) - (item.received_amount || 0),
-        '繳費狀況': item.payment_status || ''
-      }))
-
-      // 總未收帳款（篩選未收款）
-      const unpaidReceivablesSheet = receivablesSheet.filter(item => item.繳費狀況 !== '已收款')
-
-      // 準備未出帳款資料
-      const unpaidPayablesSheet = unpaid.map(item => ({
-        '合約編號': item.contract_code || '',
-        '類型': item.contract_type || '',
-        '客戶代碼': item.customer_code || '',
-        '客戶名稱': item.customer_name || '',
-        '日期': item.date || '',
-        '付款對象': item.payable_type || '',
-        '公司代碼': item.company_code || '',
-        '金額': item.amount || 0,
-        '付款狀況': item.payment_status || ''
-      }))
-
-      // 準備已出帳款資料
-      const paidPayablesSheet = paid.map(item => ({
-        '合約編號': item.contract_code || '',
-        '類型': item.contract_type || '',
-        '客戶代碼': item.customer_code || '',
-        '客戶名稱': item.customer_name || '',
-        '日期': item.date || '',
-        '付款對象': item.payable_type || '',
-        '公司代碼': item.company_code || '',
-        '金額': item.amount || 0,
-        '付款狀況': item.payment_status || ''
-      }))
-
-      // 準備服務費用資料
-      const serviceSheet = service.map(item => ({
-        '合約編號': item.contract_code || '',
-        '客戶代碼': item.customer_code || '',
-        '客戶名稱': item.customer_name || '',
-        '服務日期': item.service_date || '',
-        '確認日期': item.confirm_date || '',
-        '服務類型': item.service_type || '',
-        '維修公司代碼': item.repair_company_code || '',
-        '總金額': item.total_amount || 0,
-        '繳費狀況': item.payment_status || ''
-      }))
-
-      // 建立 Excel 工作簿
-      const wb = XLSX.utils.book_new()
-      
-      // 建立工作表
-      if (receivablesSheet.length > 0) {
-        const ws1 = XLSX.utils.json_to_sheet(receivablesSheet)
-        XLSX.utils.book_append_sheet(wb, ws1, '總應收帳款')
-      }
-      
-      if (unpaidReceivablesSheet.length > 0) {
-        const ws2 = XLSX.utils.json_to_sheet(unpaidReceivablesSheet)
-        XLSX.utils.book_append_sheet(wb, ws2, '總未收帳款')
-      }
-      
-      if (unpaidPayablesSheet.length > 0) {
-        const ws3 = XLSX.utils.json_to_sheet(unpaidPayablesSheet)
-        XLSX.utils.book_append_sheet(wb, ws3, '未出帳款')
-      }
-      
-      if (paidPayablesSheet.length > 0) {
-        const ws4 = XLSX.utils.json_to_sheet(paidPayablesSheet)
-        XLSX.utils.book_append_sheet(wb, ws4, '已出帳款')
-      }
-      
-      if (serviceSheet.length > 0) {
-        const ws5 = XLSX.utils.json_to_sheet(serviceSheet)
-        XLSX.utils.book_append_sheet(wb, ws5, '服務費用')
-      }
-
-      // 檢查是否有資料
-      const hasData = receivablesSheet.length > 0 || 
-                     unpaidPayablesSheet.length > 0 || 
-                     paidPayablesSheet.length > 0 || 
-                     serviceSheet.length > 0
-      
-      if (!hasData) {
-        setAlertType('warning')
-        setAlertMessage('選定的日期範圍內沒有資料可匯出')
-        setTimeout(() => setAlertMessage(null), 3000)
-        setExporting(false)
-        return
-      }
-
-      // 匯出檔案
-      try {
-        const fileName = `帳款資料_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`
-        XLSX.writeFile(wb, fileName)
-        
-        setAlertType('success')
-        setAlertMessage('匯出成功！')
-        setTimeout(() => setAlertMessage(null), 3000)
-      } catch (writeError) {
-        console.error('XLSX.writeFile 錯誤', writeError)
-        // 如果 writeFile 失敗，嘗試使用 Blob 方式
-        try {
-          const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-          const blob = new Blob([wbout], { type: 'application/octet-stream' })
-          const url = URL.createObjectURL(blob)
-          const link = document.createElement('a')
-          link.href = url
-          link.download = `帳款資料_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`
-          document.body.appendChild(link)
-          link.click()
-          document.body.removeChild(link)
-          URL.revokeObjectURL(url)
-          
-          setAlertType('success')
-          setAlertMessage('匯出成功！')
-          setTimeout(() => setAlertMessage(null), 3000)
-        } catch (blobError) {
-          setAlertType('error')
-          setAlertMessage('匯出失敗：' + (blobError.message || '無法建立檔案'))
-          setTimeout(() => setAlertMessage(null), 5000)
-          console.error('Blob 匯出錯誤', blobError)
-        }
-      }
-    } catch (error) {
-      const errorMsg = error?.message || error?.toString() || '未知錯誤'
-      setAlertType('error')
-      setAlertMessage('匯出失敗：' + errorMsg)
-      setTimeout(() => setAlertMessage(null), 5000)
-      console.error('匯出錯誤', error)
-    } finally {
-      setExporting(false)
+    { title: '公司代碼', dataIndex: 'repair_company_code', key: 'repair_company_code', width: 140, render: (value) => value || '-' },
+    { title: '金額', key: 'amount', width: 180, render: renderAdjustedAmount },
+    { title: '已付金額', dataIndex: 'paid_amount', key: 'paid_amount', width: 120, render: (value) => formatMoney(value) },
+    { title: '付款狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120 },
+    {
+      title: '操作',
+      key: 'action',
+      width: 120,
+      fixed: 'right',
+      render: (_, record) => (
+        <Button type="link" icon={<EditOutlined />} onClick={() => openAmountModal('service', record)}>
+          編輯金額
+        </Button>
+      )
     }
-  }
+  ]
 
   return (
     <div style={{ padding: 24 }}>
-      {alertMessage && (
-        <Alert
-          message={alertMessage}
-          type={alertType}
-          closable
-          onClose={() => setAlertMessage(null)}
-          style={{ marginBottom: 16 }}
-        />
-      )}
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'flex-end' }}>
-        <Button 
-          type="primary" 
-          icon={<DownloadOutlined />} 
-          onClick={handleExport}
+        {(activeTab === 'unpaid-payable' || activeTab === 'paid-payable') && (
+          <Button icon={<PlusOutlined />} onClick={() => setIsExtraExpenseModalOpen(true)}>
+            新增額外開銷
+          </Button>
+        )}
+        <Button
+          type="primary"
+          icon={<DownloadOutlined />}
+          onClick={handleExportCurrentTab}
           loading={exporting}
         >
-          匯出 Excel
+          匯出目前頁籤
         </Button>
       </Space>
 
@@ -488,21 +456,11 @@ function Accounts() {
         items={[
           {
             key: 'receivables',
-            label: '總應收帳款',
+            label: '應收帳款',
             children: (
               <>
-                <ReceivablesSearchForm 
-                  filters={receivablesFilters}
-                  onSearch={setReceivablesFilters}
-                />
-                <Table
-                  columns={receivablesColumns}
-                  dataSource={receivablesData}
-                  rowKey="id"
-                  loading={loading}
-                  scroll={{ x: 1200 }}
-                  pagination={{ pageSize: 10, showSizeChanger: true }}
-                />
+                <ReceivablesSearchForm onSearch={setReceivablesFilters} />
+                <Table columns={receivablesColumns} dataSource={receivablesData} rowKey="id" loading={loading} scroll={{ x: 1450 }} />
               </>
             )
           },
@@ -511,18 +469,8 @@ function Accounts() {
             label: '未出帳款',
             children: (
               <>
-                <PayablesSearchForm 
-                  filters={payablesFilters}
-                  onSearch={setPayablesFilters}
-                />
-                <Table
-                  columns={payableColumns}
-                  dataSource={unpaidPayableData}
-                  rowKey={(_, idx) => `unpaid-${idx}`}
-                  loading={loading}
-                  scroll={{ x: 1200 }}
-                  pagination={{ pageSize: 10, showSizeChanger: true }}
-                />
+                <PayablesSearchForm onSearch={setPayablesFilters} />
+                <Table columns={payableColumns} dataSource={unpaidPayableData} rowKey="id" loading={loading} scroll={{ x: 1550 }} />
               </>
             )
           },
@@ -531,18 +479,8 @@ function Accounts() {
             label: '已出帳款',
             children: (
               <>
-                <PayablesSearchForm 
-                  filters={payablesFilters}
-                  onSearch={setPayablesFilters}
-                />
-                <Table
-                  columns={payableColumns}
-                  dataSource={paidPayableData}
-                  rowKey={(_, idx) => `paid-${idx}`}
-                  loading={loading}
-                  scroll={{ x: 1200 }}
-                  pagination={{ pageSize: 10, showSizeChanger: true }}
-                />
+                <PayablesSearchForm onSearch={setPayablesFilters} />
+                <Table columns={payableColumns} dataSource={paidPayableData} rowKey="id" loading={loading} scroll={{ x: 1550 }} />
               </>
             )
           },
@@ -551,23 +489,74 @@ function Accounts() {
             label: '服務費用',
             children: (
               <>
-                <ServiceSearchForm 
-                  filters={serviceFilters}
-                  onSearch={setServiceFilters}
-                />
-                <Table
-                  columns={serviceColumns}
-                  dataSource={serviceExpenseData}
-                  rowKey="id"
-                  loading={loading}
-                  scroll={{ x: 1200 }}
-                  pagination={{ pageSize: 10, showSizeChanger: true }}
-                />
+                <ServiceSearchForm onSearch={setServiceFilters} />
+                <Table columns={serviceColumns} dataSource={serviceExpenseData} rowKey="id" loading={loading} scroll={{ x: 1300 }} />
               </>
             )
           }
         ]}
       />
+
+      <Modal
+        title={editingAmountTarget?.kind === 'receivable' ? '編輯應收金額' : '編輯服務費用金額'}
+        open={isAmountModalOpen}
+        onOk={handleAmountSubmit}
+        onCancel={() => {
+          setIsAmountModalOpen(false)
+          setEditingAmountTarget(null)
+          amountForm.resetFields()
+        }}
+        okText="儲存"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <Form form={amountForm} layout="vertical">
+          <Form.Item label="原始金額">
+            <Input value={editingAmountTarget ? formatMoney(editingAmountTarget.record.original_amount) : ''} disabled />
+          </Form.Item>
+          <Form.Item
+            label="最終金額"
+            name="amount"
+            rules={[{ required: true, message: '請輸入金額' }]}
+          >
+            <InputNumber min={0.01} step={100} style={{ width: '100%' }} addonBefore="NT$" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="新增額外開銷"
+        open={isExtraExpenseModalOpen}
+        onOk={handleExtraExpenseSubmit}
+        onCancel={() => {
+          setIsExtraExpenseModalOpen(false)
+          extraExpenseForm.resetFields()
+        }}
+        okText="新增"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <Form form={extraExpenseForm} layout="vertical">
+          <Form.Item label="發生日" name="service_date" rules={[{ required: true, message: '請選擇日期' }]}>
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="類別" name="expense_category">
+            <Input placeholder="例如：安裝、搬運、耗材" />
+          </Form.Item>
+          <Form.Item label="內容" name="description" rules={[{ required: true, message: '請填寫內容' }]}>
+            <Input.TextArea rows={3} placeholder="這次額外做了什麼" />
+          </Form.Item>
+          <Form.Item label="金額" name="amount" rules={[{ required: true, message: '請輸入金額' }]}>
+            <InputNumber min={0.01} step={100} style={{ width: '100%' }} addonBefore="NT$" />
+          </Form.Item>
+          <Form.Item label="關聯合約" name="contract_code">
+            <Input placeholder="可留空；若填寫會自動帶出客戶" />
+          </Form.Item>
+          <Form.Item label="對象 / 廠商" name="vendor_name">
+            <Input placeholder="可留空" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }
