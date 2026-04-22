@@ -110,10 +110,13 @@ function BankLedger() {
   const getReceivableOptionLabel = (item) =>
     `${item.contract_code} - ${item.customer_name} (${item.type}) | 收款期間：${formatReceivablePeriod(item)}`
 
+  const getExpensePayeeName = (item) =>
+    item?.payee_name || item?.vendor || '未指定付款對象'
+
   const getExpenseOptionLabel = (item) => {
     const itemType = item.expense_source === 'extra' ? (item.expense_category || '額外開銷') : item.service_type
     const description = item.expense_description ? ` | ${item.expense_description}` : ''
-    return `${item.contract_code || '無合約'} - ${item.customer_name || '未綁定客戶'} (${itemType})${description}`
+    return `付款對象：${getExpensePayeeName(item)} | ${itemType} | ${item.contract_code || '無合約'} - ${item.customer_name || '未綁定客戶'}${description}`
   }
 
   const columns = [
@@ -147,6 +150,7 @@ function BankLedger() {
                   {line.period ? ` / ${line.period}` : ''}
                   {line.description ? ` / ${line.description}` : ''}
                   <div style={{ fontSize: 12, color: '#666' }}>
+                    {line.payee_name ? `付款對象 ${line.payee_name} | ` : ''}
                     分攤 {formatMoney(line.allocated_amount)}
                     {line.fee_amount > 0 ? ` | 手續費 ${formatMoney(line.fee_amount)}` : ''}
                   </div>
@@ -465,10 +469,10 @@ function BankLedger() {
                                   children: (
                                     <div>
                                       <div>
-                                        <strong>{item.contract_code || '無合約'}</strong> - {item.customer_name || '未綁定客戶'} <Tag color={item.expense_source === 'extra' ? 'purple' : 'blue'}>{item.expense_source === 'extra' ? (item.expense_category || '額外開銷') : item.service_type}</Tag>
+                                        <strong>付款對象：{getExpensePayeeName(item)}</strong> <Tag color={item.expense_source === 'extra' ? 'purple' : 'blue'}>{item.expense_source === 'extra' ? (item.expense_category || '額外開銷') : item.service_type}</Tag>
                                       </div>
                                       <div style={{ fontSize: 12, color: '#666' }}>
-                                        未付 {formatMoney(item.unpaid_amount)}
+                                        合約：{item.contract_code || '無合約'} - {item.customer_name || '未綁定客戶'} | 未付 {formatMoney(item.unpaid_amount)}
                                         {item.expense_description ? ` | ${item.expense_description}` : ''}
                                       </div>
                                     </div>

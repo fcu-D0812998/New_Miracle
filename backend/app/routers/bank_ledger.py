@@ -130,6 +130,7 @@ def _serialize_line_row(row) -> dict:
         "item_type": row[9],
         "period": row[10],
         "description": row[11],
+        "payee_name": row[12],
     }
 
 
@@ -171,7 +172,16 @@ def _fetch_reconciliation_lines_map(cur, ledger_ids: List[int]) -> Dict[int, Lis
                 WHEN line.target_type = 'receivable' AND line.ar_type = '買斷' THEN to_char(ab.deal_date, 'YYYY-MM-DD')
                 WHEN line.target_type = 'service_expense' THEN to_char(se.service_date, 'YYYY-MM-DD')
             END AS period,
-            COALESCE(se.expense_description, '') AS description
+            COALESCE(se.expense_description, '') AS description,
+            CASE
+                WHEN line.target_type = 'service_expense' THEN
+                    COALESCE(
+                        NULLIF(company.name, ''),
+                        NULLIF(se.vendor_name, ''),
+                        NULLIF(se.repair_company_code, ''),
+                        '未指定付款對象'
+                    )
+            END AS payee_name
         FROM bank_ledger_reconciliation_lines line
         LEFT JOIN ar_leasing al
             ON line.target_type = 'receivable'
@@ -184,6 +194,9 @@ def _fetch_reconciliation_lines_map(cur, ledger_ids: List[int]) -> Dict[int, Lis
         LEFT JOIN service_expense se
             ON line.target_type = 'service_expense'
            AND line.target_id = se.id
+        LEFT JOIN companies company
+            ON line.target_type = 'service_expense'
+           AND company.company_code = se.repair_company_code
         WHERE line.bank_ledger_id = ANY(%s)
         ORDER BY line.bank_ledger_id, line.id
     """, (ledger_ids,))
@@ -512,25 +525,27 @@ def get_reconcilable_service_expenses(
     search: Optional[str] = Query(None, description="搜尋關鍵字"),
     service_type: Optional[str] = Query(None, description="服務類型"),
 ):
-    where_parts = ["payment_status IN ('未收', '部分收款')"]
+    where_parts = ["se.payment_status IN ('未收', '部分收款')"]
     params = []
 
     if search:
         where_parts.append("""
             (
-                COALESCE(contract_code, '') ILIKE %s
-                OR COALESCE(customer_name, '') ILIKE %s
-                OR COALESCE(expense_description, '') ILIKE %s
-                OR COALESCE(vendor_name, '') ILIKE %s
+                COALESCE(se.contract_code, '') ILIKE %s
+                OR COALESCE(se.customer_name, '') ILIKE %s
+                OR COALESCE(se.expense_description, '') ILIKE %s
+                OR COALESCE(se.vendor_name, '') ILIKE %s
+                OR COALESCE(se.repair_company_code, '') ILIKE %s
+                OR COALESCE(company.name, '') ILIKE %s
             )
         """)
-        params.extend([f"%{search}%"] * 4)
+        params.extend([f"%{search}%"] * 6)
 
     if service_type:
         where_parts.append("""
             (
-                service_type ILIKE %s
-                OR COALESCE(expense_category, '') ILIKE %s
+                se.service_type ILIKE %s
+                OR COALESCE(se.expense_category, '') ILIKE %s
             )
         """)
         params.extend([f"%{service_type}%", f"%{service_type}%"])
@@ -540,33 +555,41 @@ def get_reconcilable_service_expenses(
     with get_cursor() as cur:
         cur.execute(f"""
             SELECT
-                id,
-                contract_code,
-                customer_code,
-                customer_name,
-                service_date,
-                service_type,
-                COALESCE(repair_company_code, vendor_name) AS vendor,
-                total_amount AS original_amount,
-                adjusted_amount,
-                COALESCE(adjusted_amount, total_amount) AS amount,
-                COALESCE(paid_amount, 0) AS paid_amount,
-                GREATEST(COALESCE(adjusted_amount, total_amount) - COALESCE(paid_amount, 0), 0) AS unpaid_amount,
-                payment_status,
-                COALESCE(expense_source, 'contract') AS expense_source,
-                COALESCE(NULLIF(expense_category, ''), service_type) AS expense_category,
-                expense_description
-            FROM service_expense
+                se.id,
+                se.contract_code,
+                se.customer_code,
+                se.customer_name,
+                se.service_date,
+                se.service_type,
+                COALESCE(se.repair_company_code, se.vendor_name) AS vendor,
+                COALESCE(NULLIF(se.repair_company_code, ''), NULLIF(se.vendor_name, ''), '') AS payee_code,
+                COALESCE(
+                    NULLIF(company.name, ''),
+                    NULLIF(se.vendor_name, ''),
+                    NULLIF(se.repair_company_code, ''),
+                    '未指定付款對象'
+                ) AS payee_name,
+                se.total_amount AS original_amount,
+                se.adjusted_amount,
+                COALESCE(se.adjusted_amount, se.total_amount) AS amount,
+                COALESCE(se.paid_amount, 0) AS paid_amount,
+                GREATEST(COALESCE(se.adjusted_amount, se.total_amount) - COALESCE(se.paid_amount, 0), 0) AS unpaid_amount,
+                se.payment_status,
+                COALESCE(se.expense_source, 'contract') AS expense_source,
+                COALESCE(NULLIF(se.expense_category, ''), se.service_type) AS expense_category,
+                se.expense_description
+            FROM service_expense se
+            LEFT JOIN companies company ON company.company_code = se.repair_company_code
             {where_clause}
-            ORDER BY COALESCE(service_date, created_at::date) DESC, id DESC
+            ORDER BY COALESCE(se.service_date, se.created_at::date) DESC, se.id DESC
         """, tuple(params))
         rows = cur.fetchall()
 
     columns = [
         "id", "contract_code", "customer_code", "customer_name", "service_date",
-        "service_type", "vendor", "original_amount", "adjusted_amount", "amount",
-        "paid_amount", "unpaid_amount", "payment_status", "expense_source",
-        "expense_category", "expense_description",
+        "service_type", "vendor", "payee_code", "payee_name", "original_amount",
+        "adjusted_amount", "amount", "paid_amount", "unpaid_amount",
+        "payment_status", "expense_source", "expense_category", "expense_description",
     ]
     result = []
     for row in rows:

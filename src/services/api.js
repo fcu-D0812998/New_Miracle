@@ -104,6 +104,12 @@ export const updateServiceExpenseAmount = (id, data) =>
 export const createExtraExpense = (data) =>
   api.post('/accounts/service/extra', data).then(res => res.data)
 
+export const updateExtraExpense = (id, data) =>
+  api.put(`/accounts/service/extra/${id}`, data).then(res => res.data)
+
+export const deleteExtraExpense = (id) =>
+  api.delete(`/accounts/service/extra/${id}`)
+
 // 銀行帳本
 export const getBankLedger = (fromDate, toDate, search) => 
   api.get('/bank-ledger', { params: { from_date: fromDate, to_date: toDate, search } }).then(res => res.data)

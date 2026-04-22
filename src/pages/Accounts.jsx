@@ -11,9 +11,10 @@ import {
   Modal,
   InputNumber,
   message,
-  Tag
+  Tag,
+  Popconfirm
 } from 'antd'
-import { DownloadOutlined, EditOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
+import { DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
 import {
@@ -23,7 +24,9 @@ import {
   getPaidPayables,
   getServiceExpenses,
   updateServiceExpenseAmount,
-  createExtraExpense
+  createExtraExpense,
+  updateExtraExpense,
+  deleteExtraExpense
 } from '../services/api'
 
 const { RangePicker } = DatePicker
@@ -209,6 +212,7 @@ function Accounts() {
   const [isAmountModalOpen, setIsAmountModalOpen] = useState(false)
   const [editingAmountTarget, setEditingAmountTarget] = useState(null)
   const [isExtraExpenseModalOpen, setIsExtraExpenseModalOpen] = useState(false)
+  const [editingExtraExpense, setEditingExtraExpense] = useState(null)
   const [amountForm] = Form.useForm()
   const [extraExpenseForm] = Form.useForm()
 
@@ -281,15 +285,41 @@ function Accounts() {
     }
   }
 
+  const openExtraExpenseModal = (record = null) => {
+    setEditingExtraExpense(record)
+    if (record) {
+      extraExpenseForm.setFieldsValue({
+        service_date: record.date ? dayjs(record.date) : dayjs(),
+        expense_category: record.expense_category || record.payable_type || '額外開銷',
+        description: record.description,
+        amount: record.amount,
+        contract_code: record.contract_code,
+        vendor_name: record.vendor_name || record.company_code
+      })
+    } else {
+      extraExpenseForm.resetFields()
+    }
+    setIsExtraExpenseModalOpen(true)
+  }
+
   const handleExtraExpenseSubmit = async () => {
     try {
       const values = await extraExpenseForm.validateFields()
-      await createExtraExpense({
+      const payload = {
         ...values,
+        contract_code: values.contract_code || null,
+        vendor_name: values.vendor_name || null,
         service_date: values.service_date.format('YYYY-MM-DD')
-      })
-      message.success('額外開銷已新增')
+      }
+      if (editingExtraExpense) {
+        await updateExtraExpense(editingExtraExpense.id, payload)
+        message.success('額外開銷已更新')
+      } else {
+        await createExtraExpense(payload)
+        message.success('額外開銷已新增')
+      }
       setIsExtraExpenseModalOpen(false)
+      setEditingExtraExpense(null)
       extraExpenseForm.resetFields()
       if (activeTab === 'paid-payable') {
         setActiveTab('unpaid-payable')
@@ -298,7 +328,17 @@ function Accounts() {
       }
     } catch (error) {
       if (error.errorFields) return
-      message.error('新增失敗：' + (error.response?.data?.detail || error.message))
+      message.error((editingExtraExpense ? '更新' : '新增') + '失敗：' + (error.response?.data?.detail || error.message))
+    }
+  }
+
+  const handleDeleteExtraExpense = async (record) => {
+    try {
+      await deleteExtraExpense(record.id)
+      message.success('額外開銷已刪除')
+      loadCurrentTab()
+    } catch (error) {
+      message.error('刪除失敗：' + (error.response?.data?.detail || error.message))
     }
   }
 
@@ -336,6 +376,7 @@ function Accounts() {
             服務日期: item.service_date || '',
             服務類型: item.service_type,
             公司代碼: item.repair_company_code || '',
+            付款對象: item.payee_name || item.repair_company_code || '',
             原始金額: item.original_amount,
             最終金額: item.amount,
             已付金額: item.paid_amount,
@@ -350,7 +391,8 @@ function Accounts() {
           客戶代碼: item.customer_code || '',
           客戶名稱: item.customer_name || '',
           應付類型: item.payable_type || '',
-          公司或對象: item.company_code || '',
+          付款對象: item.payee_name || item.company_code || '',
+          公司代碼或廠商: item.company_code || '',
           說明: item.description || '',
           原始金額: item.original_amount,
           最終金額: item.amount,
@@ -402,12 +444,51 @@ function Accounts() {
     { title: '合約類型', dataIndex: 'contract_type', key: 'contract_type', width: 110, render: (value) => value || '-' },
     { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150, render: (value) => value || '-' },
     { title: '應付類型', dataIndex: 'payable_type', key: 'payable_type', width: 130 },
-    { title: '公司或對象', dataIndex: 'company_code', key: 'company_code', width: 140, render: (value) => value || '-' },
+    {
+      title: '付款對象',
+      dataIndex: 'payee_name',
+      key: 'payee_name',
+      width: 180,
+      render: (value, record) => (
+        <div>
+          <div>{value || record.company_code || '-'}</div>
+          {record.company_code && value && record.company_code !== value && (
+            <div style={{ fontSize: 12, color: '#666' }}>{record.company_code}</div>
+          )}
+        </div>
+      )
+    },
     { title: '說明', dataIndex: 'description', key: 'description', width: 220, render: (value) => value || '-' },
     { title: '金額', key: 'amount', width: 180, render: renderAdjustedAmount },
     { title: '已付金額', dataIndex: 'paid_amount', key: 'paid_amount', width: 120, render: (value) => formatMoney(value) },
     { title: '未付金額', dataIndex: 'unpaid_amount', key: 'unpaid_amount', width: 120, render: (value) => formatMoney(value) },
-    { title: '付款狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120 }
+    { title: '付款狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120 },
+    ...(activeTab === 'unpaid-payable' ? [{
+      title: '操作',
+      key: 'action',
+      width: 180,
+      fixed: 'right',
+      render: (_, record) => (
+        record.expense_source === 'extra' ? (
+          <Space>
+            <Button type="link" icon={<EditOutlined />} onClick={() => openExtraExpenseModal(record)}>
+              編輯
+            </Button>
+            <Popconfirm
+              title="確定要刪除這筆額外開銷嗎？"
+              description="已付款或已對帳的額外開銷需要先取消對帳。"
+              onConfirm={() => handleDeleteExtraExpense(record)}
+            >
+              <Button type="link" danger icon={<DeleteOutlined />}>刪除</Button>
+            </Popconfirm>
+          </Space>
+        ) : (
+          <Button type="link" icon={<EditOutlined />} onClick={() => openAmountModal('service', record)}>
+            編輯金額
+          </Button>
+        )
+      )
+    }] : [])
   ]
 
   const serviceColumns = [
@@ -436,7 +517,7 @@ function Accounts() {
     <div style={{ padding: 24 }}>
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'flex-end' }}>
         {(activeTab === 'unpaid-payable' || activeTab === 'paid-payable') && (
-          <Button icon={<PlusOutlined />} onClick={() => setIsExtraExpenseModalOpen(true)}>
+          <Button icon={<PlusOutlined />} onClick={() => openExtraExpenseModal()}>
             新增額外開銷
           </Button>
         )}
@@ -525,14 +606,15 @@ function Accounts() {
       </Modal>
 
       <Modal
-        title="新增額外開銷"
+        title={editingExtraExpense ? '編輯額外開銷' : '新增額外開銷'}
         open={isExtraExpenseModalOpen}
         onOk={handleExtraExpenseSubmit}
         onCancel={() => {
           setIsExtraExpenseModalOpen(false)
+          setEditingExtraExpense(null)
           extraExpenseForm.resetFields()
         }}
-        okText="新增"
+        okText={editingExtraExpense ? '儲存' : '新增'}
         cancelText="取消"
         destroyOnClose
       >

@@ -257,6 +257,14 @@ def _get_payables(status_mode: str,
     """
     effective_amount_expr = "COALESCE(se.adjusted_amount, se.total_amount)"
     company_expr = "COALESCE(NULLIF(se.repair_company_code, ''), NULLIF(se.vendor_name, ''), '')"
+    payee_name_expr = """
+        COALESCE(
+            NULLIF(company.name, ''),
+            NULLIF(se.vendor_name, ''),
+            NULLIF(se.repair_company_code, ''),
+            '未指定付款對象'
+        )
+    """
 
     where_parts = []
     params = []
@@ -304,6 +312,10 @@ def _get_payables(status_mode: str,
                 {date_expr} AS date,
                 {payable_type_expr} AS payable_type,
                 {company_expr} AS company_code,
+                {payee_name_expr} AS payee_name,
+                se.vendor_name,
+                se.expense_category,
+                se.service_type,
                 se.total_amount AS original_amount,
                 se.adjusted_amount,
                 {effective_amount_expr} AS amount,
@@ -315,6 +327,7 @@ def _get_payables(status_mode: str,
             FROM service_expense se
             LEFT JOIN contracts_leasing cl ON cl.contract_code = se.contract_code
             LEFT JOIN contracts_buyout cb ON cb.contract_code = se.contract_code
+            LEFT JOIN companies company ON company.company_code = se.repair_company_code
             {where_clause}
             ORDER BY {date_expr} DESC NULLS LAST, se.id DESC
         """, tuple(params))
@@ -322,7 +335,8 @@ def _get_payables(status_mode: str,
 
     columns = [
         "id", "contract_code", "contract_type", "customer_code", "customer_name",
-        "date", "payable_type", "company_code", "original_amount", "adjusted_amount",
+        "date", "payable_type", "company_code", "payee_name", "vendor_name",
+        "expense_category", "service_type", "original_amount", "adjusted_amount",
         "amount", "paid_amount", "unpaid_amount", "payment_status", "expense_source", "description",
     ]
 
@@ -633,6 +647,148 @@ def create_extra_expense(payload: ExtraExpenseCreate):
                 "description": row[12],
                 "vendor_name": row[13],
             }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+
+
+@router.put("/service/extra/{expense_id}")
+def update_extra_expense(expense_id: int, payload: ExtraExpenseCreate):
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="金額需大於 0")
+    if not payload.description or not payload.description.strip():
+        raise HTTPException(status_code=400, detail="請填寫額外開銷內容")
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COALESCE(expense_source, 'contract'), COALESCE(paid_amount, 0)
+                FROM service_expense
+                WHERE id = %s
+                FOR UPDATE
+            """, (expense_id,))
+            existing = cur.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="額外開銷不存在")
+            if existing[0] != "extra":
+                raise HTTPException(status_code=400, detail="合約自動產生的服務費用只能編輯金額")
+
+            paid_amount = _to_float(existing[1])
+            customer_code, customer_name, _ = _lookup_contract_context(cur, payload.contract_code) if payload.contract_code else (None, None, None)
+            category = (payload.expense_category or "額外開銷").strip() or "額外開銷"
+            service_type = category[:100]
+            description = payload.description.strip()
+            vendor_name = payload.vendor_name.strip() if payload.vendor_name else None
+            payment_status = _calculate_service_status(payload.amount, paid_amount)
+
+            cur.execute("""
+                UPDATE service_expense
+                SET contract_code = %s,
+                    customer_code = %s,
+                    customer_name = %s,
+                    service_date = %s,
+                    service_type = %s,
+                    repair_company_code = NULL,
+                    total_amount = %s,
+                    adjusted_amount = NULL,
+                    paid_amount = %s,
+                    payment_status = %s,
+                    expense_source = 'extra',
+                    expense_category = %s,
+                    expense_description = %s,
+                    vendor_name = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                RETURNING id, contract_code, customer_code, customer_name, service_date,
+                          service_type, total_amount, adjusted_amount, paid_amount,
+                          payment_status, expense_source, expense_category,
+                          expense_description, vendor_name
+            """, (
+                payload.contract_code,
+                customer_code,
+                customer_name,
+                payload.service_date,
+                service_type,
+                payload.amount,
+                paid_amount,
+                payment_status,
+                category,
+                description,
+                vendor_name,
+                expense_id,
+            ))
+            row = cur.fetchone()
+            conn.commit()
+
+            return {
+                "id": row[0],
+                "contract_code": row[1],
+                "customer_code": row[2],
+                "customer_name": row[3],
+                "service_date": _serialize_date(row[4]),
+                "service_type": row[5],
+                "original_amount": _to_float(row[6]),
+                "adjusted_amount": _to_float(row[7]) if row[7] is not None else None,
+                "amount": _to_float(row[7]) if row[7] is not None else _to_float(row[6]),
+                "paid_amount": _to_float(row[8]),
+                "payment_status": _service_status_to_display(row[9]),
+                "expense_source": row[10],
+                "expense_category": row[11],
+                "description": row[12],
+                "vendor_name": row[13],
+            }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+
+
+@router.delete("/service/extra/{expense_id}", status_code=204)
+def delete_extra_expense(expense_id: int):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COALESCE(expense_source, 'contract'), COALESCE(paid_amount, 0), payment_status
+                FROM service_expense
+                WHERE id = %s
+                FOR UPDATE
+            """, (expense_id,))
+            existing = cur.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="額外開銷不存在")
+            if existing[0] != "extra":
+                raise HTTPException(status_code=400, detail="只有額外開銷可以刪除")
+
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM bank_ledger_reconciliation_lines
+                    WHERE target_type = 'service_expense'
+                      AND target_id = %s
+                ) OR EXISTS (
+                    SELECT 1
+                    FROM bank_ledger
+                    WHERE reconciled_service_expense_id = %s
+                      AND is_reconciled = TRUE
+                )
+            """, (expense_id, expense_id))
+            has_reconciliation = cur.fetchone()[0]
+            if has_reconciliation or _to_float(existing[1]) > 0 or existing[2] != RECEIVABLE_UNPAID:
+                raise HTTPException(status_code=400, detail="這筆額外開銷已有付款或對帳紀錄，請先取消對帳後再刪除")
+
+            cur.execute("DELETE FROM service_expense WHERE id = %s", (expense_id,))
+            conn.commit()
     except HTTPException:
         conn.rollback()
         raise
