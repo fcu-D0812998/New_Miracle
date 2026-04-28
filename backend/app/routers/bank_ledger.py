@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.accounting_period import accounting_period_for_date, apply_accounting_period_filter
 from app.database import get_connection, get_cursor
 
 router = APIRouter()
@@ -227,7 +228,8 @@ def _row_to_ledger(row, line_map: Optional[Dict[int, List[dict]]] = None) -> dic
         fee_total = _to_float(row[12]) if bool(row[6]) else 0.0
 
     base_amount = income if income > 0 else expense
-    unallocated_amount = max(base_amount - reconciled_amount, 0.0)
+    ledger_used_amount = reconciled_amount + (fee_total if expense > 0 else 0.0)
+    unallocated_amount = max(base_amount - ledger_used_amount, 0.0)
 
     return {
         "id": row[0],
@@ -250,13 +252,15 @@ def _row_to_ledger(row, line_map: Optional[Dict[int, List[dict]]] = None) -> dic
         "reconciled_fee_total": fee_total,
         "unallocated_amount": unallocated_amount,
         "reconciliation_lines": (line_map or {}).get(row[0], []),
+        "accounting_period": row[18],
     }
 
 
 def _fetch_ledger_rows(cur, from_date: Optional[str] = None,
                        to_date: Optional[str] = None,
                        search: Optional[str] = None,
-                       ledger_id: Optional[int] = None):
+                       ledger_id: Optional[int] = None,
+                       accounting_period: Optional[str] = "current"):
     where_parts = []
     params = []
 
@@ -272,6 +276,8 @@ def _fetch_ledger_rows(cur, from_date: Optional[str] = None,
     if search:
         where_parts.append("(ledger.payer ILIKE %s OR ledger.note ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
+    if ledger_id is None:
+        apply_accounting_period_filter(where_parts, params, "ledger.accounting_period", accounting_period)
 
     where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
 
@@ -294,7 +300,8 @@ def _fetch_ledger_rows(cur, from_date: Optional[str] = None,
             ledger.updated_at,
             COALESCE(stats.line_count, 0) AS line_count,
             COALESCE(stats.allocated_amount, 0) AS reconciled_amount,
-            COALESCE(stats.fee_total, 0) AS fee_total
+            COALESCE(stats.fee_total, 0) AS fee_total,
+            COALESCE(ledger.accounting_period, 'current') AS accounting_period
         FROM bank_ledger ledger
         LEFT JOIN (
             SELECT
@@ -312,7 +319,7 @@ def _fetch_ledger_rows(cur, from_date: Optional[str] = None,
 
 
 def _fetch_ledger_detail(cur, ledger_id: int) -> dict:
-    rows = _fetch_ledger_rows(cur, ledger_id=ledger_id)
+    rows = _fetch_ledger_rows(cur, ledger_id=ledger_id, accounting_period="all")
     if not rows:
         raise HTTPException(status_code=404, detail="銀行帳本資料不存在")
     line_map = _fetch_reconciliation_lines_map(cur, [ledger_id])
@@ -324,9 +331,16 @@ def get_bank_ledger(
     from_date: Optional[str] = Query(None, description="起始日期 (YYYY-MM-DD)"),
     to_date: Optional[str] = Query(None, description="結束日期 (YYYY-MM-DD)"),
     search: Optional[str] = Query(None, description="搜尋關鍵字"),
+    accounting_period: Optional[str] = Query("current", description="帳務期間：current/prior/all"),
 ):
     with get_cursor() as cur:
-        rows = _fetch_ledger_rows(cur, from_date=from_date, to_date=to_date, search=search)
+        rows = _fetch_ledger_rows(
+            cur,
+            from_date=from_date,
+            to_date=to_date,
+            search=search,
+            accounting_period=accounting_period,
+        )
         line_map = _fetch_reconciliation_lines_map(cur, [row[0] for row in rows])
         return [_row_to_ledger(row, line_map) for row in rows]
 
@@ -341,8 +355,8 @@ def create_bank_ledger(ledger: BankLedgerCreate):
                 (txn_date, payer, expense, income, note, is_reconciled,
                  reconciled_ar_id, reconciled_ar_type,
                  reconciled_payable_contract_code, reconciled_payable_type,
-                 reconciled_service_expense_id, reconciled_fee_amount)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 reconciled_service_expense_id, reconciled_fee_amount, accounting_period)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
                 ledger.txn_date,
@@ -357,6 +371,7 @@ def create_bank_ledger(ledger: BankLedgerCreate):
                 ledger.reconciled_payable_type,
                 ledger.reconciled_service_expense_id,
                 ledger.reconciled_fee_amount,
+                accounting_period_for_date(ledger.txn_date),
             ))
             new_id = cur.fetchone()[0]
             conn.commit()
@@ -387,6 +402,7 @@ def update_bank_ledger(id: int, ledger: BankLedgerUpdate):
                     reconciled_payable_type = %s,
                     reconciled_service_expense_id = %s,
                     reconciled_fee_amount = %s,
+                    accounting_period = %s,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
             """, (
@@ -402,6 +418,7 @@ def update_bank_ledger(id: int, ledger: BankLedgerUpdate):
                 ledger.reconciled_payable_type,
                 ledger.reconciled_service_expense_id,
                 ledger.reconciled_fee_amount,
+                accounting_period_for_date(ledger.txn_date),
                 id,
             ))
             if cur.rowcount == 0:
@@ -441,6 +458,7 @@ def delete_bank_ledger(id: int):
 def get_reconcilable_receivables(
     search: Optional[str] = Query(None, description="搜尋關鍵字（合約編號/客戶名稱）"),
     type: Optional[str] = Query(None, description="類型（租賃/買斷）"),
+    accounting_period: Optional[str] = Query("current", description="帳務期間：current/prior/all"),
 ):
     result = []
     with get_cursor() as cur:
@@ -450,6 +468,7 @@ def get_reconcilable_receivables(
             if search:
                 where_parts.append("(contract_code ILIKE %s OR customer_name ILIKE %s)")
                 params.extend([f"%{search}%", f"%{search}%"])
+            apply_accounting_period_filter(where_parts, params, "accounting_period", accounting_period)
             cur.execute(f"""
                 SELECT
                     id,
@@ -465,7 +484,8 @@ def get_reconcilable_receivables(
                     fee,
                     received_amount,
                     payment_status,
-                    (COALESCE(adjusted_amount, total_rent) + COALESCE(fee, 0) - COALESCE(received_amount, 0)) AS unpaid_amount
+                    (COALESCE(adjusted_amount, total_rent) + COALESCE(fee, 0) - COALESCE(received_amount, 0)) AS unpaid_amount,
+                    COALESCE(accounting_period, 'current') AS accounting_period
                 FROM ar_leasing
                 WHERE {" AND ".join(where_parts)}
                 ORDER BY contract_code, start_date
@@ -478,6 +498,7 @@ def get_reconcilable_receivables(
             if search:
                 where_parts.append("(contract_code ILIKE %s OR customer_name ILIKE %s)")
                 params.extend([f"%{search}%", f"%{search}%"])
+            apply_accounting_period_filter(where_parts, params, "accounting_period", accounting_period)
             cur.execute(f"""
                 SELECT
                     id,
@@ -493,7 +514,8 @@ def get_reconcilable_receivables(
                     fee,
                     received_amount,
                     payment_status,
-                    (COALESCE(adjusted_amount, total_amount) + COALESCE(fee, 0) - COALESCE(received_amount, 0)) AS unpaid_amount
+                    (COALESCE(adjusted_amount, total_amount) + COALESCE(fee, 0) - COALESCE(received_amount, 0)) AS unpaid_amount,
+                    COALESCE(accounting_period, 'current') AS accounting_period
                 FROM ar_buyout
                 WHERE {" AND ".join(where_parts)}
                 ORDER BY contract_code, deal_date
@@ -503,7 +525,7 @@ def get_reconcilable_receivables(
     columns = [
         "id", "type", "contract_code", "customer_code", "customer_name",
         "date", "end_date", "original_amount", "adjusted_amount", "amount",
-        "fee", "received_amount", "payment_status", "unpaid_amount",
+        "fee", "received_amount", "payment_status", "unpaid_amount", "accounting_period",
     ]
     serialized = []
     for row in result:
@@ -524,6 +546,7 @@ def get_reconcilable_receivables(
 def get_reconcilable_service_expenses(
     search: Optional[str] = Query(None, description="搜尋關鍵字"),
     service_type: Optional[str] = Query(None, description="服務類型"),
+    accounting_period: Optional[str] = Query("current", description="帳務期間：current/prior/all"),
 ):
     where_parts = ["se.payment_status IN ('未收', '部分收款')"]
     params = []
@@ -549,6 +572,7 @@ def get_reconcilable_service_expenses(
             )
         """)
         params.extend([f"%{service_type}%", f"%{service_type}%"])
+    apply_accounting_period_filter(where_parts, params, "se.accounting_period", accounting_period)
 
     where_clause = " WHERE " + " AND ".join(where_parts)
 
@@ -577,7 +601,8 @@ def get_reconcilable_service_expenses(
                 se.payment_status,
                 COALESCE(se.expense_source, 'contract') AS expense_source,
                 COALESCE(NULLIF(se.expense_category, ''), se.service_type) AS expense_category,
-                se.expense_description
+                se.expense_description,
+                COALESCE(se.accounting_period, 'current') AS accounting_period
             FROM service_expense se
             LEFT JOIN companies company ON company.company_code = se.repair_company_code
             {where_clause}
@@ -590,6 +615,7 @@ def get_reconcilable_service_expenses(
         "service_type", "vendor", "payee_code", "payee_name", "original_amount",
         "adjusted_amount", "amount", "paid_amount", "unpaid_amount",
         "payment_status", "expense_source", "expense_category", "expense_description",
+        "accounting_period",
     ]
     result = []
     for row in rows:
@@ -635,7 +661,7 @@ def _build_lines(request: ReconcileRequest, ledger_amount: float) -> List[dict]:
         raise HTTPException(status_code=400, detail="請至少提供一筆對帳明細")
 
     seen_keys = set()
-    total_allocated = 0.0
+    total_ledger_usage = 0.0
     for item in lines:
         if item["allocated_amount"] <= 0:
             raise HTTPException(status_code=400, detail="分攤金額需大於 0")
@@ -645,10 +671,12 @@ def _build_lines(request: ReconcileRequest, ledger_amount: float) -> List[dict]:
         if key in seen_keys:
             raise HTTPException(status_code=400, detail="同一筆對帳資料不可重複分攤")
         seen_keys.add(key)
-        total_allocated += item["allocated_amount"]
+        total_ledger_usage += item["allocated_amount"]
+        if request.reconcile_type == "service_expense":
+            total_ledger_usage += item["fee_amount"]
 
-    if total_allocated > ledger_amount + 0.000001:
-        raise HTTPException(status_code=400, detail="分攤金額加總不可超過銀行流水金額")
+    if total_ledger_usage > ledger_amount + 0.000001:
+        raise HTTPException(status_code=400, detail="分攤金額與手續費加總不可超過銀行流水金額")
 
     return lines
 

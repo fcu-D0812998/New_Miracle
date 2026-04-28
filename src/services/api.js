@@ -46,11 +46,11 @@ export const deleteCompany = (companyCode) =>
   api.delete(`/companies/${companyCode}`)
 
 // 合約資料
-export const getLeasingContracts = (search) => 
-  api.get('/contracts/leasing', { params: { search } }).then(res => res.data)
+export const getLeasingContracts = (search, accountingPeriod = 'current') =>
+  api.get('/contracts/leasing', { params: { search, accounting_period: accountingPeriod } }).then(res => res.data)
 
-export const getBuyoutContracts = (search) => 
-  api.get('/contracts/buyout', { params: { search } }).then(res => res.data)
+export const getBuyoutContracts = (search, accountingPeriod = 'current') =>
+  api.get('/contracts/buyout', { params: { search, accounting_period: accountingPeriod } }).then(res => res.data)
 
 export const createLeasingContract = (data) => 
   api.post('/contracts/leasing', data).then(res => res.data)
@@ -111,8 +111,8 @@ export const deleteExtraExpense = (id) =>
   api.delete(`/accounts/service/extra/${id}`)
 
 // 銀行帳本
-export const getBankLedger = (fromDate, toDate, search) => 
-  api.get('/bank-ledger', { params: { from_date: fromDate, to_date: toDate, search } }).then(res => res.data)
+export const getBankLedger = (fromDate, toDate, search, accountingPeriod = 'current') =>
+  api.get('/bank-ledger', { params: { from_date: fromDate, to_date: toDate, search, accounting_period: accountingPeriod } }).then(res => res.data)
 
 export const createBankLedger = (data) => 
   api.post('/bank-ledger', data).then(res => res.data)
@@ -124,11 +124,11 @@ export const deleteBankLedger = (id) =>
   api.delete(`/bank-ledger/${id}`)
 
 // 對帳相關
-export const getReconcilableReceivables = (search, type) => 
-  api.get('/bank-ledger/reconcilable/receivables', { params: { search, type } }).then(res => res.data)
+export const getReconcilableReceivables = (search, type, accountingPeriod = 'current') =>
+  api.get('/bank-ledger/reconcilable/receivables', { params: { search, type, accounting_period: accountingPeriod } }).then(res => res.data)
 
-export const getReconcilableServiceExpenses = (search, service_type) => 
-  api.get('/bank-ledger/reconcilable/service-expenses', { params: { search, service_type } }).then(res => res.data)
+export const getReconcilableServiceExpenses = (search, service_type, accountingPeriod = 'current') =>
+  api.get('/bank-ledger/reconcilable/service-expenses', { params: { search, service_type, accounting_period: accountingPeriod } }).then(res => res.data)
 
 export const reconcileBankLedger = (id, data) => 
   api.post(`/bank-ledger/${id}/reconcile`, data).then(res => res.data)

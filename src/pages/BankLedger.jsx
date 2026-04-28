@@ -36,15 +36,22 @@ import {
   reconcileBankLedger,
   unreconcileBankLedger
 } from '../services/api'
+import { booleanSorter, dateSorter, numberSorter, textSorter } from '../utils/tableSorters'
 
 const { TextArea } = Input
 const { RangePicker } = DatePicker
+const ACCOUNTING_PERIOD_OPTIONS = [
+  { value: 'current', label: '本期' },
+  { value: 'prior', label: '前帳' },
+  { value: 'all', label: '全部' }
+]
 
 const formatMoney = (value) => `NT$ ${Number(value || 0).toLocaleString()}`
 
 function BankLedger() {
   const [searchText, setSearchText] = useState('')
   const [dateRange, setDateRange] = useState(null)
+  const [accountingPeriod, setAccountingPeriod] = useState('current')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isReconcileModalOpen, setIsReconcileModalOpen] = useState(false)
   const [editingRecord, setEditingRecord] = useState(null)
@@ -63,7 +70,7 @@ function BankLedger() {
     try {
       const fromDate = dateRange?.[0]?.format('YYYY-MM-DD')
       const toDate = dateRange?.[1]?.format('YYYY-MM-DD')
-      const data = await getBankLedger(fromDate, toDate, searchText || undefined)
+      const data = await getBankLedger(fromDate, toDate, searchText || undefined, accountingPeriod)
       setDataSource(data)
     } catch (error) {
       message.error('載入資料失敗：' + (error.response?.data?.detail || error.message))
@@ -74,7 +81,7 @@ function BankLedger() {
 
   useEffect(() => {
     loadData()
-  }, [dateRange, searchText])
+  }, [dateRange, searchText, accountingPeriod])
 
   useEffect(() => {
     if (!isModalOpen) return
@@ -100,7 +107,14 @@ function BankLedger() {
     [watchedLines]
   )
 
-  const remainingAmount = Math.max(ledgerAmount - allocatedTotal, 0)
+  const feeTotal = useMemo(
+    () => watchedLines.reduce((sum, line) => sum + Number(line?.fee_amount || 0), 0),
+    [watchedLines]
+  )
+
+  const isReconcilingExpense = (reconcilingRecord?.expense || 0) > 0
+  const ledgerUsedTotal = allocatedTotal + (isReconcilingExpense ? feeTotal : 0)
+  const remainingAmount = Math.max(ledgerAmount - ledgerUsedTotal, 0)
 
   const formatReceivablePeriod = (receivable) => {
     if (!receivable?.date) return '-'
@@ -119,23 +133,47 @@ function BankLedger() {
     return `付款對象：${getExpensePayeeName(item)} | ${itemType} | ${item.contract_code || '無合約'} - ${item.customer_name || '未綁定客戶'}${description}`
   }
 
+  const getReconciledInfoText = (record) => {
+    if (!record.is_reconciled) return ''
+    if (record.reconciliation_lines?.length) {
+      return record.reconciliation_lines
+        .map((line) => [
+          line.item_type,
+          line.contract_code,
+          line.customer_name,
+          line.period,
+          line.description,
+          line.payee_name
+        ].filter(Boolean).join(' / '))
+        .join(' | ')
+    }
+    if (record.reconciled_ar_id) return `應收帳款 ${record.reconciled_ar_id} ${record.reconciled_ar_type || ''}`
+    if (record.reconciled_service_expense_id) return `服務費用 ${record.reconciled_service_expense_id}`
+    if (record.reconciled_payable_contract_code) {
+      return `合約 ${record.reconciled_payable_contract_code} ${record.reconciled_payable_type || ''}`
+    }
+    return ''
+  }
+
   const columns = [
-    { title: '日期', dataIndex: 'txn_date', key: 'txn_date', width: 120 },
-    { title: '對象', dataIndex: 'payer', key: 'payer', width: 160 },
-    { title: '支出金額', dataIndex: 'expense', key: 'expense', width: 120, render: (value) => value > 0 ? formatMoney(value) : '-' },
-    { title: '收入金額', dataIndex: 'income', key: 'income', width: 120, render: (value) => value > 0 ? formatMoney(value) : '-' },
-    { title: '備註', dataIndex: 'note', key: 'note', width: 180 },
+    { title: '日期', dataIndex: 'txn_date', key: 'txn_date', width: 120, sorter: dateSorter('txn_date') },
+    { title: '對象', dataIndex: 'payer', key: 'payer', width: 160, sorter: textSorter('payer') },
+    { title: '支出金額', dataIndex: 'expense', key: 'expense', width: 120, sorter: numberSorter('expense'), render: (value) => value > 0 ? formatMoney(value) : '-' },
+    { title: '收入金額', dataIndex: 'income', key: 'income', width: 120, sorter: numberSorter('income'), render: (value) => value > 0 ? formatMoney(value) : '-' },
+    { title: '備註', dataIndex: 'note', key: 'note', width: 180, sorter: textSorter('note') },
     {
       title: '對帳狀態',
       dataIndex: 'is_reconciled',
       key: 'is_reconciled',
       width: 110,
+      sorter: booleanSorter('is_reconciled'),
       render: (value) => value ? <Tag color="green">已對帳</Tag> : <Tag>未對帳</Tag>
     },
     {
       title: '對帳資訊',
       key: 'reconciled_info',
       width: 360,
+      sorter: textSorter(getReconciledInfoText),
       render: (_, record) => {
         if (!record.is_reconciled) return '-'
 
@@ -157,7 +195,9 @@ function BankLedger() {
                 </div>
               ))}
               <div style={{ fontSize: 12, color: '#666' }}>
-                已分攤 {formatMoney(record.reconciled_amount)} / 剩餘 {formatMoney(record.unallocated_amount)}
+                已分攤 {formatMoney(record.reconciled_amount)}
+                {record.reconciled_fee_total > 0 ? ` / 手續費 ${formatMoney(record.reconciled_fee_total)}` : ''}
+                {' / '}剩餘 {formatMoney(record.unallocated_amount)}
               </div>
             </div>
           )
@@ -260,16 +300,17 @@ function BankLedger() {
     setReconcilingRecord(record)
     setReconcileLoading(true)
     try {
+      const targetAccountingPeriod = record.accounting_period || accountingPeriod || 'current'
       if (record.income > 0) {
-        const receivables = await getReconcilableReceivables()
+        const receivables = await getReconcilableReceivables(undefined, undefined, targetAccountingPeriod)
         setReconcilableReceivables(receivables)
         setReconcilableServiceExpenses([])
         reconcileForm.setFieldsValue({ lines: [{ fee_amount: 0 }] })
       } else if (record.expense > 0) {
-        const expenses = await getReconcilableServiceExpenses()
+        const expenses = await getReconcilableServiceExpenses(undefined, undefined, targetAccountingPeriod)
         setReconcilableServiceExpenses(expenses)
         setReconcilableReceivables([])
-        reconcileForm.setFieldsValue({ lines: [{}] })
+        reconcileForm.setFieldsValue({ lines: [{ fee_amount: 0 }] })
       }
       setIsReconcileModalOpen(true)
     } catch (error) {
@@ -305,7 +346,8 @@ function BankLedger() {
         }
         return {
           target_id: line.target_id,
-          allocated_amount: line.allocated_amount
+          allocated_amount: line.allocated_amount,
+          fee_amount: line.fee_amount || 0
         }
       })
 
@@ -344,6 +386,12 @@ function BankLedger() {
     <div style={{ padding: 24 }}>
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Space>
+          <Select
+            value={accountingPeriod}
+            onChange={setAccountingPeriod}
+            options={ACCOUNTING_PERIOD_OPTIONS}
+            style={{ width: 110 }}
+          />
           <RangePicker value={dateRange} onChange={setDateRange} format="YYYY-MM-DD" />
           <Input
             placeholder="搜尋關鍵字"
@@ -424,7 +472,11 @@ function BankLedger() {
             <p><strong>日期：</strong>{reconcilingRecord.txn_date}</p>
             <p><strong>對象：</strong>{reconcilingRecord.payer || '-'}</p>
             <p><strong>流水金額：</strong>{formatMoney(ledgerAmount)}</p>
-            <p><strong>已分攤：</strong>{formatMoney(allocatedTotal)} / <strong>剩餘：</strong>{formatMoney(remainingAmount)}</p>
+            <p>
+              <strong>已分攤：</strong>{formatMoney(allocatedTotal)}
+              {feeTotal > 0 ? <> / <strong>手續費：</strong>{formatMoney(feeTotal)}</> : null}
+              {' / '}<strong>剩餘：</strong>{formatMoney(remainingAmount)}
+            </p>
             <p><strong>備註：</strong>{reconcilingRecord.note || '-'}</p>
           </div>
         )}
@@ -491,16 +543,15 @@ function BankLedger() {
                       >
                         <InputNumber min={0.01} step={100} style={{ width: '100%' }} addonBefore="NT$" />
                       </Form.Item>
-                      {reconcilingRecord?.income > 0 && (
-                        <Form.Item
-                          {...field}
-                          label="手續費"
-                          name={[field.name, 'fee_amount']}
-                          style={{ width: 160 }}
-                        >
-                          <InputNumber min={0} step={1} style={{ width: '100%' }} addonBefore="NT$" />
-                        </Form.Item>
-                      )}
+                      <Form.Item
+                        {...field}
+                        label="手續費"
+                        name={[field.name, 'fee_amount']}
+                        tooltip={reconcilingRecord?.expense > 0 ? '支出手續費只記錄在銀行對帳，不會加到服務費用已付金額' : undefined}
+                        style={{ width: 160 }}
+                      >
+                        <InputNumber min={0} step={1} style={{ width: '100%' }} addonBefore="NT$" />
+                      </Form.Item>
                       <Button
                         danger
                         type="text"
@@ -513,7 +564,7 @@ function BankLedger() {
                     {index < fields.length - 1 && <Divider style={{ margin: '12px 0 0' }} />}
                   </div>
                 ))}
-                <Button type="dashed" icon={<PlusOutlined />} onClick={() => add(reconcilingRecord?.income > 0 ? { fee_amount: 0 } : {})} block>
+                <Button type="dashed" icon={<PlusOutlined />} onClick={() => add({ fee_amount: 0 })} block>
                   新增分攤
                 </Button>
               </>

@@ -11,9 +11,18 @@ import {
   pauseBuyoutContract, resumeBuyoutContract,
   getCustomers, getCompanies
 } from '../services/api'
+import { booleanSorter, dateSorter, numberSorter, statusSorter, textSorter } from '../utils/tableSorters'
+
+const ACCOUNTING_PERIOD_OPTIONS = [
+  { value: 'current', label: '本期' },
+  { value: 'prior', label: '前帳' },
+  { value: 'all', label: '全部' }
+]
+const CONTRACT_STATUS_ORDER = { active: 0, paused: 1 }
 
 function Contracts() {
   const [searchText, setSearchText] = useState('')
+  const [accountingPeriod, setAccountingPeriod] = useState('current')
   const [activeTab, setActiveTab] = useState('leasing')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingRecord, setEditingRecord] = useState(null)
@@ -43,7 +52,7 @@ function Contracts() {
   const loadLeasingData = async () => {
     setLoading(true)
     try {
-      const data = await getLeasingContracts(searchText || undefined)
+      const data = await getLeasingContracts(searchText || undefined, accountingPeriod)
       setLeasingData(data)
     } catch (error) {
       message.error('載入租賃合約失敗')
@@ -55,7 +64,7 @@ function Contracts() {
   const loadBuyoutData = async () => {
     setLoading(true)
     try {
-      const data = await getBuyoutContracts(searchText || undefined)
+      const data = await getBuyoutContracts(searchText || undefined, accountingPeriod)
       setBuyoutData(data)
     } catch (error) {
       message.error('載入買斷合約失敗')
@@ -74,7 +83,7 @@ function Contracts() {
     } else {
       loadBuyoutData()
     }
-  }, [activeTab, searchText])
+  }, [activeTab, searchText, accountingPeriod])
 
   useEffect(() => {
     if (isModalOpen) {
@@ -110,20 +119,20 @@ function Contracts() {
   }
 
   const leasingColumns = [
-    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120 },
-    { title: '狀態', dataIndex: 'status', key: 'status', width: 90, render: renderStatusTag },
-    { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120 },
-    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150 },
-    { title: '起始日', dataIndex: 'start_date', key: 'start_date', width: 100 },
-    { title: '機型', dataIndex: 'model', key: 'model', width: 150 },
-    { title: '台數', dataIndex: 'quantity', key: 'quantity', width: 80 },
-    { title: '月租金', dataIndex: 'monthly_rent', key: 'monthly_rent', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
-    { title: '繳費週期(月)', dataIndex: 'payment_cycle_months', key: 'payment_cycle_months', width: 120 },
-    { title: '超印', dataIndex: 'overprint', key: 'overprint', width: 150 },
-    { title: '合約期數(月)', dataIndex: 'contract_months', key: 'contract_months', width: 120 },
-    { title: '需開發票', dataIndex: 'needs_invoice', key: 'needs_invoice', width: 100, render: (val) => val ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
-    { title: '業務金額', dataIndex: 'sales_amount', key: 'sales_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
-    { title: '維護金額', dataIndex: 'service_amount', key: 'service_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
+    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120, sorter: textSorter('contract_code') },
+    { title: '狀態', dataIndex: 'status', key: 'status', width: 90, sorter: statusSorter('status', CONTRACT_STATUS_ORDER), render: renderStatusTag },
+    { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120, sorter: textSorter('customer_code') },
+    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150, sorter: textSorter('customer_name') },
+    { title: '起始日', dataIndex: 'start_date', key: 'start_date', width: 100, sorter: dateSorter('start_date') },
+    { title: '機型', dataIndex: 'model', key: 'model', width: 150, sorter: textSorter('model') },
+    { title: '台數', dataIndex: 'quantity', key: 'quantity', width: 80, sorter: numberSorter('quantity') },
+    { title: '月租金', dataIndex: 'monthly_rent', key: 'monthly_rent', width: 120, sorter: numberSorter('monthly_rent'), render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
+    { title: '繳費週期(月)', dataIndex: 'payment_cycle_months', key: 'payment_cycle_months', width: 120, sorter: numberSorter('payment_cycle_months') },
+    { title: '超印', dataIndex: 'overprint', key: 'overprint', width: 150, sorter: textSorter('overprint') },
+    { title: '合約期數(月)', dataIndex: 'contract_months', key: 'contract_months', width: 120, sorter: numberSorter('contract_months') },
+    { title: '需開發票', dataIndex: 'needs_invoice', key: 'needs_invoice', width: 100, sorter: booleanSorter('needs_invoice'), render: (val) => val ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
+    { title: '業務金額', dataIndex: 'sales_amount', key: 'sales_amount', width: 120, sorter: numberSorter('sales_amount'), render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
+    { title: '維護金額', dataIndex: 'service_amount', key: 'service_amount', width: 120, sorter: numberSorter('service_amount'), render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
     {
       title: '操作',
       key: 'action',
@@ -150,15 +159,15 @@ function Contracts() {
   ]
 
   const buyoutColumns = [
-    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120 },
-    { title: '狀態', dataIndex: 'status', key: 'status', width: 90, render: renderStatusTag },
-    { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120 },
-    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150 },
-    { title: '成交日期', dataIndex: 'deal_date', key: 'deal_date', width: 100 },
-    { title: '成交金額', dataIndex: 'deal_amount', key: 'deal_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
-    { title: '需開發票', dataIndex: 'needs_invoice', key: 'needs_invoice', width: 100, render: (val) => val ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
-    { title: '業務金額', dataIndex: 'sales_amount', key: 'sales_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
-    { title: '維護金額', dataIndex: 'service_amount', key: 'service_amount', width: 120, render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
+    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120, sorter: textSorter('contract_code') },
+    { title: '狀態', dataIndex: 'status', key: 'status', width: 90, sorter: statusSorter('status', CONTRACT_STATUS_ORDER), render: renderStatusTag },
+    { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120, sorter: textSorter('customer_code') },
+    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150, sorter: textSorter('customer_name') },
+    { title: '成交日期', dataIndex: 'deal_date', key: 'deal_date', width: 100, sorter: dateSorter('deal_date') },
+    { title: '成交金額', dataIndex: 'deal_amount', key: 'deal_amount', width: 120, sorter: numberSorter('deal_amount'), render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
+    { title: '需開發票', dataIndex: 'needs_invoice', key: 'needs_invoice', width: 100, sorter: booleanSorter('needs_invoice'), render: (val) => val ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
+    { title: '業務金額', dataIndex: 'sales_amount', key: 'sales_amount', width: 120, sorter: numberSorter('sales_amount'), render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
+    { title: '維護金額', dataIndex: 'service_amount', key: 'service_amount', width: 120, sorter: numberSorter('service_amount'), render: (val) => val ? `NT$ ${val?.toLocaleString()}` : '-' },
     {
       title: '操作',
       key: 'action',
@@ -406,14 +415,22 @@ function Contracts() {
   return (
     <div style={{ padding: 24 }}>
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
-        <Input
-          placeholder="🔍 搜尋合約（可搜尋任何欄位）"
-          prefix={<SearchOutlined />}
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          style={{ width: 400 }}
-          allowClear
-        />
+        <Space>
+          <Select
+            value={accountingPeriod}
+            onChange={setAccountingPeriod}
+            options={ACCOUNTING_PERIOD_OPTIONS}
+            style={{ width: 110 }}
+          />
+          <Input
+            placeholder="🔍 搜尋合約（可搜尋任何欄位）"
+            prefix={<SearchOutlined />}
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            style={{ width: 400 }}
+            allowClear
+          />
+        </Space>
       </Space>
 
       <Tabs

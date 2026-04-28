@@ -1,5 +1,6 @@
 """合約服務 - 處理應收帳款與服務費用產生邏輯。"""
 from datetime import date
+from app.accounting_period import accounting_period_for_date
 from app.utils.date_utils import add_months, subtract_days
 
 RECEIVABLE_UNPAID = "未收"
@@ -66,15 +67,16 @@ def generate_leasing_ar(contract_code: str, customer_code: str, customer_name: s
             received_amount = existing.get("received_amount", 0.0)
             effective_amount = adjusted_amount if adjusted_amount is not None else base_amount
             payment_status = _calculate_receivable_status(effective_amount, fee, received_amount)
+            accounting_period = accounting_period_for_date(current_end)
 
             cur.execute("""
                 INSERT INTO ar_leasing
                 (contract_code, customer_code, customer_name, start_date, end_date,
-                 total_rent, adjusted_amount, fee, received_amount, payment_status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 total_rent, adjusted_amount, fee, received_amount, payment_status, accounting_period)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 contract_code, customer_code, customer_name, current_start, current_end,
-                base_amount, adjusted_amount, fee, received_amount, payment_status
+                base_amount, adjusted_amount, fee, received_amount, payment_status, accounting_period
             ))
 
             current_start = add_months(current_start, period_months)
@@ -104,23 +106,25 @@ def generate_buyout_ar(contract_code: str, customer_code: str, customer_name: st
         adjusted_amount = float(existing[3]) if existing and existing[3] is not None else None
         effective_amount = adjusted_amount if adjusted_amount is not None else deal_amount
         payment_status = _calculate_receivable_status(effective_amount, fee, received_amount)
+        accounting_period = accounting_period_for_date(deal_date)
 
         cur.execute("DELETE FROM ar_buyout WHERE contract_code = %s", (contract_code,))
         cur.execute("""
             INSERT INTO ar_buyout
             (contract_code, customer_code, customer_name, deal_date,
-             total_amount, adjusted_amount, fee, received_amount, payment_status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+             total_amount, adjusted_amount, fee, received_amount, payment_status, accounting_period)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             contract_code, customer_code, customer_name, deal_date,
-            deal_amount, adjusted_amount, fee, received_amount, payment_status
+            deal_amount, adjusted_amount, fee, received_amount, payment_status, accounting_period
         ))
 
 
 def _sync_contract_service_expenses(contract_code: str, customer_code: str, customer_name: str,
                                     sales_company_code: str = None, sales_amount: float = None,
                                     service_company_code: str = None, service_amount: float = None,
-                                    conn=None):
+                                    conn=None, effective_date: date = None):
+    accounting_period = accounting_period_for_date(effective_date)
     with conn.cursor() as cur:
         cur.execute("""
             SELECT id, service_type, total_amount, adjusted_amount, paid_amount
@@ -161,11 +165,12 @@ def _sync_contract_service_expenses(contract_code: str, customer_code: str, cust
                             expense_category = NULL,
                             expense_description = NULL,
                             vendor_name = NULL,
+                            accounting_period = %s,
                             updated_at = CURRENT_TIMESTAMP
                         WHERE id = %s
                     """, (
                         customer_code, customer_name, service_type, company_code,
-                        base_amount, adjusted_amount, paid_amount, payment_status,
+                        base_amount, adjusted_amount, paid_amount, payment_status, accounting_period,
                         existing["id"]
                     ))
                 else:
@@ -173,11 +178,11 @@ def _sync_contract_service_expenses(contract_code: str, customer_code: str, cust
                         INSERT INTO service_expense
                         (contract_code, customer_code, customer_name, service_type,
                          repair_company_code, total_amount, adjusted_amount, paid_amount,
-                         payment_status, expense_source)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'contract')
+                         payment_status, expense_source, accounting_period)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'contract', %s)
                     """, (
                         contract_code, customer_code, customer_name, service_type,
-                        company_code, base_amount, None, 0, RECEIVABLE_UNPAID
+                        company_code, base_amount, None, 0, RECEIVABLE_UNPAID, accounting_period
                     ))
             elif existing:
                 cur.execute("DELETE FROM service_expense WHERE id = %s", (existing["id"],))
@@ -189,7 +194,8 @@ def _sync_contract_service_expenses(contract_code: str, customer_code: str, cust
 def generate_service_expenses_for_leasing(contract_code: str, customer_code: str,
                                           customer_name: str, sales_company_code: str = None,
                                           sales_amount: float = None, service_company_code: str = None,
-                                          service_amount: float = None, conn=None):
+                                          service_amount: float = None, conn=None,
+                                          effective_date: date = None):
     """同步租賃合約的業務/維護服務費用。"""
     _sync_contract_service_expenses(
         contract_code,
@@ -200,13 +206,15 @@ def generate_service_expenses_for_leasing(contract_code: str, customer_code: str
         service_company_code=service_company_code,
         service_amount=service_amount,
         conn=conn,
+        effective_date=effective_date,
     )
 
 
 def generate_service_expenses_for_buyout(contract_code: str, customer_code: str,
                                          customer_name: str, sales_company_code: str = None,
                                          sales_amount: float = None, service_company_code: str = None,
-                                         service_amount: float = None, conn=None):
+                                         service_amount: float = None, conn=None,
+                                         effective_date: date = None):
     """同步買斷合約的業務/維護服務費用。"""
     _sync_contract_service_expenses(
         contract_code,
@@ -217,4 +225,5 @@ def generate_service_expenses_for_buyout(contract_code: str, customer_code: str,
         service_company_code=service_company_code,
         service_amount=service_amount,
         conn=conn,
+        effective_date=effective_date,
     )

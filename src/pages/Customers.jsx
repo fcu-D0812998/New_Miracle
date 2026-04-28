@@ -11,6 +11,7 @@ import {
 } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons'
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer, changeCustomerCode } from '../services/api'
+import { textSorter } from '../utils/tableSorters'
 
 const { TextArea } = Input
 
@@ -49,16 +50,16 @@ function Customers() {
   }, [isModalOpen, editingRecord])
 
   const columns = [
-    { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120 },
-    { title: '客戶名稱', dataIndex: 'name', key: 'name', width: 150 },
-    { title: '聯絡人', dataIndex: 'contact_name', key: 'contact_name', width: 120 },
-    { title: '手機', dataIndex: 'mobile', key: 'mobile', width: 120 },
-    { title: '電話', dataIndex: 'phone', key: 'phone', width: 120 },
-    { title: '地址', dataIndex: 'address', key: 'address', width: 200 },
-    { title: 'Email', dataIndex: 'email', key: 'email', width: 150 },
-    { title: '統編', dataIndex: 'tax_id', key: 'tax_id', width: 100 },
-    { title: '負責業務', dataIndex: 'sales_rep_name', key: 'sales_rep_name', width: 120 },
-    { title: '備註', dataIndex: 'remark', key: 'remark' },
+    { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120, sorter: textSorter('customer_code') },
+    { title: '客戶名稱', dataIndex: 'name', key: 'name', width: 150, sorter: textSorter('name') },
+    { title: '聯絡人', dataIndex: 'contact_name', key: 'contact_name', width: 120, sorter: textSorter('contact_name') },
+    { title: '手機', dataIndex: 'mobile', key: 'mobile', width: 120, sorter: textSorter('mobile') },
+    { title: '電話', dataIndex: 'phone', key: 'phone', width: 120, sorter: textSorter('phone') },
+    { title: '地址', dataIndex: 'address', key: 'address', width: 200, sorter: textSorter('address') },
+    { title: 'Email', dataIndex: 'email', key: 'email', width: 150, sorter: textSorter('email') },
+    { title: '統編', dataIndex: 'tax_id', key: 'tax_id', width: 100, sorter: textSorter('tax_id') },
+    { title: '負責業務', dataIndex: 'sales_rep_name', key: 'sales_rep_name', width: 120, sorter: textSorter('sales_rep_name') },
+    { title: '備註', dataIndex: 'remark', key: 'remark', sorter: textSorter('remark') },
     {
       title: '操作',
       key: 'action',

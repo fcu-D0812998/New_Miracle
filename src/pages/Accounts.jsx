@@ -28,8 +28,17 @@ import {
   updateExtraExpense,
   deleteExtraExpense
 } from '../services/api'
+import { dateSorter, numberSorter, statusSorter, textSorter } from '../utils/tableSorters'
 
 const { RangePicker } = DatePicker
+const DEFAULT_ACCOUNTING_FILTERS = { accounting_period: 'current' }
+const ACCOUNTING_PERIOD_OPTIONS = [
+  { value: 'current', label: '本期' },
+  { value: 'prior', label: '前帳' },
+  { value: 'all', label: '全部' }
+]
+const RECEIVABLE_STATUS_ORDER = { 未收: 0, 部分收款: 1, 已收款: 2 }
+const PAYABLE_STATUS_ORDER = { 未付款: 0, 部分付款: 1, 已付款: 2 }
 
 const ReceivablesSearchForm = ({ onSearch }) => {
   const [form] = Form.useForm()
@@ -44,11 +53,12 @@ const ReceivablesSearchForm = ({ onSearch }) => {
     if (values.dateRange?.[1]) filters.to_date = values.dateRange[1].format('YYYY-MM-DD')
     if (values.payment_status) filters.payment_status = values.payment_status
     if (values.type) filters.type = values.type
+    filters.accounting_period = values.accounting_period || DEFAULT_ACCOUNTING_FILTERS.accounting_period
     onSearch(filters)
   }
 
   return (
-    <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
+    <Form form={form} layout="inline" initialValues={DEFAULT_ACCOUNTING_FILTERS} style={{ marginBottom: 16 }}>
       <Form.Item label="合約編號" name="contract_code">
         <Input placeholder="部分比對" style={{ width: 150 }} allowClear />
       </Form.Item>
@@ -74,11 +84,14 @@ const ReceivablesSearchForm = ({ onSearch }) => {
           <Select.Option value="已收款">已收款</Select.Option>
         </Select>
       </Form.Item>
+      <Form.Item label="帳務期間" name="accounting_period">
+        <Select style={{ width: 110 }} options={ACCOUNTING_PERIOD_OPTIONS} />
+      </Form.Item>
       <Form.Item>
         <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查詢</Button>
       </Form.Item>
       <Form.Item>
-        <Button onClick={() => { form.resetFields(); onSearch({}) }}>清除</Button>
+        <Button onClick={() => { form.resetFields(); onSearch(DEFAULT_ACCOUNTING_FILTERS) }}>清除</Button>
       </Form.Item>
     </Form>
   )
@@ -98,11 +111,12 @@ const PayablesSearchForm = ({ onSearch }) => {
     if (values.payment_status) filters.payment_status = values.payment_status
     if (values.payable_type) filters.payable_type = values.payable_type
     if (values.contract_type) filters.contract_type = values.contract_type
+    filters.accounting_period = values.accounting_period || DEFAULT_ACCOUNTING_FILTERS.accounting_period
     onSearch(filters)
   }
 
   return (
-    <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
+    <Form form={form} layout="inline" initialValues={DEFAULT_ACCOUNTING_FILTERS} style={{ marginBottom: 16 }}>
       <Form.Item label="合約編號" name="contract_code">
         <Input placeholder="部分比對" style={{ width: 150 }} allowClear />
       </Form.Item>
@@ -136,11 +150,14 @@ const PayablesSearchForm = ({ onSearch }) => {
           <Select.Option value="已付款">已付款</Select.Option>
         </Select>
       </Form.Item>
+      <Form.Item label="帳務期間" name="accounting_period">
+        <Select style={{ width: 110 }} options={ACCOUNTING_PERIOD_OPTIONS} />
+      </Form.Item>
       <Form.Item>
         <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查詢</Button>
       </Form.Item>
       <Form.Item>
-        <Button onClick={() => { form.resetFields(); onSearch({}) }}>清除</Button>
+        <Button onClick={() => { form.resetFields(); onSearch(DEFAULT_ACCOUNTING_FILTERS) }}>清除</Button>
       </Form.Item>
     </Form>
   )
@@ -159,11 +176,12 @@ const ServiceSearchForm = ({ onSearch }) => {
     if (values.dateRange?.[1]) filters.to_date = values.dateRange[1].format('YYYY-MM-DD')
     if (values.payment_status) filters.payment_status = values.payment_status
     if (values.service_type) filters.service_type = values.service_type
+    filters.accounting_period = values.accounting_period || DEFAULT_ACCOUNTING_FILTERS.accounting_period
     onSearch(filters)
   }
 
   return (
-    <Form form={form} layout="inline" style={{ marginBottom: 16 }}>
+    <Form form={form} layout="inline" initialValues={DEFAULT_ACCOUNTING_FILTERS} style={{ marginBottom: 16 }}>
       <Form.Item label="合約編號" name="contract_code">
         <Input placeholder="部分比對" style={{ width: 150 }} allowClear />
       </Form.Item>
@@ -186,11 +204,14 @@ const ServiceSearchForm = ({ onSearch }) => {
           <Select.Option value="已付款">已付款</Select.Option>
         </Select>
       </Form.Item>
+      <Form.Item label="帳務期間" name="accounting_period">
+        <Select style={{ width: 110 }} options={ACCOUNTING_PERIOD_OPTIONS} />
+      </Form.Item>
       <Form.Item>
         <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查詢</Button>
       </Form.Item>
       <Form.Item>
-        <Button onClick={() => { form.resetFields(); onSearch({}) }}>清除</Button>
+        <Button onClick={() => { form.resetFields(); onSearch(DEFAULT_ACCOUNTING_FILTERS) }}>清除</Button>
       </Form.Item>
     </Form>
   )
@@ -206,9 +227,9 @@ function Accounts() {
   const [serviceExpenseData, setServiceExpenseData] = useState([])
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [receivablesFilters, setReceivablesFilters] = useState({})
-  const [payablesFilters, setPayablesFilters] = useState({})
-  const [serviceFilters, setServiceFilters] = useState({})
+  const [receivablesFilters, setReceivablesFilters] = useState(DEFAULT_ACCOUNTING_FILTERS)
+  const [payablesFilters, setPayablesFilters] = useState(DEFAULT_ACCOUNTING_FILTERS)
+  const [serviceFilters, setServiceFilters] = useState(DEFAULT_ACCOUNTING_FILTERS)
   const [isAmountModalOpen, setIsAmountModalOpen] = useState(false)
   const [editingAmountTarget, setEditingAmountTarget] = useState(null)
   const [isExtraExpenseModalOpen, setIsExtraExpenseModalOpen] = useState(false)
@@ -415,16 +436,16 @@ function Accounts() {
   }
 
   const receivablesColumns = [
-    { title: '類型', dataIndex: 'type', key: 'type', width: 80 },
-    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120 },
-    { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120 },
-    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150 },
-    { title: '起日', dataIndex: 'date', key: 'date', width: 110 },
-    { title: '迄日', dataIndex: 'end_date', key: 'end_date', width: 110, render: (value) => value || '-' },
-    { title: '金額', key: 'amount', width: 180, render: renderAdjustedAmount },
-    { title: '手續費', dataIndex: 'fee', key: 'fee', width: 120, render: (value) => formatMoney(value) },
-    { title: '已收金額', dataIndex: 'received_amount', key: 'received_amount', width: 120, render: (value) => formatMoney(value) },
-    { title: '繳費狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120 },
+    { title: '類型', dataIndex: 'type', key: 'type', width: 80, sorter: textSorter('type') },
+    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120, sorter: textSorter('contract_code') },
+    { title: '客戶代碼', dataIndex: 'customer_code', key: 'customer_code', width: 120, sorter: textSorter('customer_code') },
+    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150, sorter: textSorter('customer_name') },
+    { title: '起日', dataIndex: 'date', key: 'date', width: 110, sorter: dateSorter('date') },
+    { title: '迄日', dataIndex: 'end_date', key: 'end_date', width: 110, sorter: dateSorter('end_date'), render: (value) => value || '-' },
+    { title: '金額', key: 'amount', width: 180, sorter: numberSorter('amount'), render: renderAdjustedAmount },
+    { title: '手續費', dataIndex: 'fee', key: 'fee', width: 120, sorter: numberSorter('fee'), render: (value) => formatMoney(value) },
+    { title: '已收金額', dataIndex: 'received_amount', key: 'received_amount', width: 120, sorter: numberSorter('received_amount'), render: (value) => formatMoney(value) },
+    { title: '繳費狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120, sorter: statusSorter('payment_status', RECEIVABLE_STATUS_ORDER) },
     {
       title: '操作',
       key: 'action',
@@ -439,16 +460,17 @@ function Accounts() {
   ]
 
   const payableColumns = [
-    { title: '日期', dataIndex: 'date', key: 'date', width: 110, render: (value) => value || '-' },
-    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120, render: (value) => value || '-' },
-    { title: '合約類型', dataIndex: 'contract_type', key: 'contract_type', width: 110, render: (value) => value || '-' },
-    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150, render: (value) => value || '-' },
-    { title: '應付類型', dataIndex: 'payable_type', key: 'payable_type', width: 130 },
+    { title: '日期', dataIndex: 'date', key: 'date', width: 110, sorter: dateSorter('date'), render: (value) => value || '-' },
+    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120, sorter: textSorter('contract_code'), render: (value) => value || '-' },
+    { title: '合約類型', dataIndex: 'contract_type', key: 'contract_type', width: 110, sorter: textSorter('contract_type'), render: (value) => value || '-' },
+    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150, sorter: textSorter('customer_name'), render: (value) => value || '-' },
+    { title: '應付類型', dataIndex: 'payable_type', key: 'payable_type', width: 130, sorter: textSorter('payable_type') },
     {
       title: '付款對象',
       dataIndex: 'payee_name',
       key: 'payee_name',
       width: 180,
+      sorter: textSorter((record) => record.payee_name || record.company_code),
       render: (value, record) => (
         <div>
           <div>{value || record.company_code || '-'}</div>
@@ -458,11 +480,11 @@ function Accounts() {
         </div>
       )
     },
-    { title: '說明', dataIndex: 'description', key: 'description', width: 220, render: (value) => value || '-' },
-    { title: '金額', key: 'amount', width: 180, render: renderAdjustedAmount },
-    { title: '已付金額', dataIndex: 'paid_amount', key: 'paid_amount', width: 120, render: (value) => formatMoney(value) },
-    { title: '未付金額', dataIndex: 'unpaid_amount', key: 'unpaid_amount', width: 120, render: (value) => formatMoney(value) },
-    { title: '付款狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120 },
+    { title: '說明', dataIndex: 'description', key: 'description', width: 220, sorter: textSorter('description'), render: (value) => value || '-' },
+    { title: '金額', key: 'amount', width: 180, sorter: numberSorter('amount'), render: renderAdjustedAmount },
+    { title: '已付金額', dataIndex: 'paid_amount', key: 'paid_amount', width: 120, sorter: numberSorter('paid_amount'), render: (value) => formatMoney(value) },
+    { title: '未付金額', dataIndex: 'unpaid_amount', key: 'unpaid_amount', width: 120, sorter: numberSorter('unpaid_amount'), render: (value) => formatMoney(value) },
+    { title: '付款狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120, sorter: statusSorter('payment_status', PAYABLE_STATUS_ORDER) },
     ...(activeTab === 'unpaid-payable' ? [{
       title: '操作',
       key: 'action',
@@ -492,14 +514,14 @@ function Accounts() {
   ]
 
   const serviceColumns = [
-    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120 },
-    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150 },
-    { title: '服務日期', dataIndex: 'service_date', key: 'service_date', width: 110, render: (value) => value || '-' },
-    { title: '服務類型', dataIndex: 'service_type', key: 'service_type', width: 100 },
-    { title: '公司代碼', dataIndex: 'repair_company_code', key: 'repair_company_code', width: 140, render: (value) => value || '-' },
-    { title: '金額', key: 'amount', width: 180, render: renderAdjustedAmount },
-    { title: '已付金額', dataIndex: 'paid_amount', key: 'paid_amount', width: 120, render: (value) => formatMoney(value) },
-    { title: '付款狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120 },
+    { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120, sorter: textSorter('contract_code') },
+    { title: '客戶名稱', dataIndex: 'customer_name', key: 'customer_name', width: 150, sorter: textSorter('customer_name') },
+    { title: '服務日期', dataIndex: 'service_date', key: 'service_date', width: 110, sorter: dateSorter('service_date'), render: (value) => value || '-' },
+    { title: '服務類型', dataIndex: 'service_type', key: 'service_type', width: 100, sorter: textSorter('service_type') },
+    { title: '公司代碼', dataIndex: 'repair_company_code', key: 'repair_company_code', width: 140, sorter: textSorter('repair_company_code'), render: (value) => value || '-' },
+    { title: '金額', key: 'amount', width: 180, sorter: numberSorter('amount'), render: renderAdjustedAmount },
+    { title: '已付金額', dataIndex: 'paid_amount', key: 'paid_amount', width: 120, sorter: numberSorter('paid_amount'), render: (value) => formatMoney(value) },
+    { title: '付款狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120, sorter: statusSorter('payment_status', PAYABLE_STATUS_ORDER) },
     {
       title: '操作',
       key: 'action',

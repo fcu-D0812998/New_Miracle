@@ -12,6 +12,7 @@ import {
 } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons'
 import { getCompanies, createCompany, updateCompany, deleteCompany } from '../services/api'
+import { booleanSorter, textSorter } from '../utils/tableSorters'
 
 const { TextArea } = Input
 
@@ -50,20 +51,21 @@ function Companies() {
   }, [isModalOpen, editingRecord])
 
   const columns = [
-    { title: '公司代碼', dataIndex: 'company_code', key: 'company_code', width: 120 },
-    { title: '公司名稱', dataIndex: 'name', key: 'name', width: 150 },
-    { title: '聯絡人', dataIndex: 'contact_name', key: 'contact_name', width: 120 },
-    { title: '手機', dataIndex: 'mobile', key: 'mobile', width: 120 },
-    { title: '電話', dataIndex: 'phone', key: 'phone', width: 120 },
-    { title: '地址', dataIndex: 'address', key: 'address', width: 200 },
-    { title: 'Email', dataIndex: 'email', key: 'email', width: 150 },
-    { title: '統編', dataIndex: 'tax_id', key: 'tax_id', width: 100 },
-    { title: '負責業務', dataIndex: 'sales_rep', key: 'sales_rep', width: 120 },
+    { title: '公司代碼', dataIndex: 'company_code', key: 'company_code', width: 120, sorter: textSorter('company_code') },
+    { title: '公司名稱', dataIndex: 'name', key: 'name', width: 150, sorter: textSorter('name') },
+    { title: '聯絡人', dataIndex: 'contact_name', key: 'contact_name', width: 120, sorter: textSorter('contact_name') },
+    { title: '手機', dataIndex: 'mobile', key: 'mobile', width: 120, sorter: textSorter('mobile') },
+    { title: '電話', dataIndex: 'phone', key: 'phone', width: 120, sorter: textSorter('phone') },
+    { title: '地址', dataIndex: 'address', key: 'address', width: 200, sorter: textSorter('address') },
+    { title: 'Email', dataIndex: 'email', key: 'email', width: 150, sorter: textSorter('email') },
+    { title: '統編', dataIndex: 'tax_id', key: 'tax_id', width: 100, sorter: textSorter('tax_id') },
+    { title: '負責業務', dataIndex: 'sales_rep', key: 'sales_rep', width: 120, sorter: textSorter('sales_rep') },
     { 
       title: '業務公司', 
       dataIndex: 'is_sales', 
       key: 'is_sales', 
       width: 100,
+      sorter: booleanSorter('is_sales'),
       render: (val) => val ? '✓' : '-'
     },
     { 
@@ -71,6 +73,7 @@ function Companies() {
       dataIndex: 'is_service', 
       key: 'is_service', 
       width: 100,
+      sorter: booleanSorter('is_service'),
       render: (val) => val ? '✓' : '-'
     },
     {

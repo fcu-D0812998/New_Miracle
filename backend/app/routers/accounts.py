@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from app.accounting_period import accounting_period_for_date, apply_accounting_period_filter
 from app.database import get_connection, get_cursor
 
 router = APIRouter()
@@ -117,6 +118,7 @@ def get_receivables(
     to_date: Optional[str] = Query(None, description="結束日期 (YYYY-MM-DD)"),
     payment_status: Optional[str] = Query(None, description="繳費狀況"),
     type: Optional[str] = Query(None, description="類型（租賃/買斷）"),
+    accounting_period: Optional[str] = Query("current", description="帳務期間：current/prior/all"),
 ):
     with get_cursor() as cur:
         result = []
@@ -142,6 +144,7 @@ def get_receivables(
             if payment_status:
                 where_parts.append("payment_status = %s")
                 params.append(payment_status)
+            apply_accounting_period_filter(where_parts, params, "accounting_period", accounting_period)
 
             where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
             cur.execute(f"""
@@ -158,7 +161,8 @@ def get_receivables(
                     COALESCE(adjusted_amount, total_rent) AS amount,
                     fee,
                     received_amount,
-                    payment_status
+                    payment_status,
+                    COALESCE(accounting_period, 'current') AS accounting_period
                 FROM ar_leasing
                 {where_clause}
                 ORDER BY contract_code, start_date
@@ -186,6 +190,7 @@ def get_receivables(
             if payment_status:
                 where_parts.append("payment_status = %s")
                 params.append(payment_status)
+            apply_accounting_period_filter(where_parts, params, "accounting_period", accounting_period)
 
             where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
             cur.execute(f"""
@@ -202,7 +207,8 @@ def get_receivables(
                     COALESCE(adjusted_amount, total_amount) AS amount,
                     fee,
                     received_amount,
-                    payment_status
+                    payment_status,
+                    COALESCE(accounting_period, 'current') AS accounting_period
                 FROM ar_buyout
                 {where_clause}
                 ORDER BY contract_code, deal_date
@@ -212,7 +218,7 @@ def get_receivables(
     columns = [
         "id", "type", "contract_code", "customer_code", "customer_name",
         "date", "end_date", "original_amount", "adjusted_amount", "amount",
-        "fee", "received_amount", "payment_status",
+        "fee", "received_amount", "payment_status", "accounting_period",
     ]
 
     serialized = []
@@ -238,7 +244,8 @@ def _get_payables(status_mode: str,
                   to_date: Optional[str] = None,
                   payment_status: Optional[str] = None,
                   payable_type: Optional[str] = None,
-                  contract_type: Optional[str] = None):
+                  contract_type: Optional[str] = None,
+                  accounting_period: Optional[str] = "current"):
     date_expr = "COALESCE(se.service_date, cl.start_date, cb.deal_date)"
     contract_type_expr = """
         CASE
@@ -298,6 +305,7 @@ def _get_payables(status_mode: str,
     if contract_type:
         where_parts.append(f"{contract_type_expr} = %s")
         params.append(contract_type)
+    apply_accounting_period_filter(where_parts, params, "se.accounting_period", accounting_period)
 
     where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
 
@@ -323,7 +331,8 @@ def _get_payables(status_mode: str,
                 GREATEST({effective_amount_expr} - COALESCE(se.paid_amount, 0), 0) AS unpaid_amount,
                 se.payment_status,
                 COALESCE(se.expense_source, 'contract') AS expense_source,
-                se.expense_description AS description
+                se.expense_description AS description,
+                COALESCE(se.accounting_period, 'current') AS accounting_period
             FROM service_expense se
             LEFT JOIN contracts_leasing cl ON cl.contract_code = se.contract_code
             LEFT JOIN contracts_buyout cb ON cb.contract_code = se.contract_code
@@ -337,7 +346,8 @@ def _get_payables(status_mode: str,
         "id", "contract_code", "contract_type", "customer_code", "customer_name",
         "date", "payable_type", "company_code", "payee_name", "vendor_name",
         "expense_category", "service_type", "original_amount", "adjusted_amount",
-        "amount", "paid_amount", "unpaid_amount", "payment_status", "expense_source", "description",
+        "amount", "paid_amount", "unpaid_amount", "payment_status", "expense_source",
+        "description", "accounting_period",
     ]
 
     result = []
@@ -365,6 +375,7 @@ def get_unpaid_payables(
     payment_status: Optional[str] = Query(None, description="付款狀況"),
     payable_type: Optional[str] = Query(None, description="應付類型"),
     contract_type: Optional[str] = Query(None, description="合約類型"),
+    accounting_period: Optional[str] = Query("current", description="帳務期間：current/prior/all"),
 ):
     return _get_payables(
         "unpaid",
@@ -376,6 +387,7 @@ def get_unpaid_payables(
         payment_status=payment_status,
         payable_type=payable_type,
         contract_type=contract_type,
+        accounting_period=accounting_period,
     )
 
 
@@ -389,6 +401,7 @@ def get_paid_payables(
     payment_status: Optional[str] = Query(None, description="付款狀況"),
     payable_type: Optional[str] = Query(None, description="應付類型"),
     contract_type: Optional[str] = Query(None, description="合約類型"),
+    accounting_period: Optional[str] = Query("current", description="帳務期間：current/prior/all"),
 ):
     return _get_payables(
         "paid",
@@ -400,6 +413,7 @@ def get_paid_payables(
         payment_status=payment_status,
         payable_type=payable_type,
         contract_type=contract_type,
+        accounting_period=accounting_period,
     )
 
 
@@ -412,6 +426,7 @@ def get_service_expenses(
     to_date: Optional[str] = Query(None, description="結束日期 (YYYY-MM-DD)"),
     payment_status: Optional[str] = Query(None, description="付款狀況"),
     service_type: Optional[str] = Query(None, description="服務類型"),
+    accounting_period: Optional[str] = Query("current", description="帳務期間：current/prior/all"),
 ):
     where_parts = ["COALESCE(expense_source, 'contract') = 'contract'"]
     params = []
@@ -437,6 +452,7 @@ def get_service_expenses(
     if service_type:
         where_parts.append("service_type ILIKE %s")
         params.append(f"%{service_type}%")
+    apply_accounting_period_filter(where_parts, params, "accounting_period", accounting_period)
 
     where_clause = " WHERE " + " AND ".join(where_parts)
 
@@ -455,7 +471,8 @@ def get_service_expenses(
                 adjusted_amount,
                 COALESCE(adjusted_amount, total_amount) AS amount,
                 COALESCE(paid_amount, 0) AS paid_amount,
-                payment_status
+                payment_status,
+                COALESCE(accounting_period, 'current') AS accounting_period
             FROM service_expense
             {where_clause}
             ORDER BY COALESCE(service_date, created_at::date) DESC, id DESC
@@ -465,7 +482,8 @@ def get_service_expenses(
     columns = [
         "id", "contract_code", "customer_code", "customer_name",
         "service_date", "confirm_date", "service_type", "repair_company_code",
-        "original_amount", "adjusted_amount", "amount", "paid_amount", "payment_status",
+        "original_amount", "adjusted_amount", "amount", "paid_amount",
+        "payment_status", "accounting_period",
     ]
 
     result = []
@@ -605,17 +623,18 @@ def create_extra_expense(payload: ExtraExpenseCreate):
             service_type = category[:100]
             description = payload.description.strip()
             vendor_name = payload.vendor_name.strip() if payload.vendor_name else None
+            accounting_period = accounting_period_for_date(payload.service_date)
 
             cur.execute("""
                 INSERT INTO service_expense
                 (contract_code, customer_code, customer_name, service_date, service_type,
                  total_amount, adjusted_amount, paid_amount, payment_status, expense_source,
-                 expense_category, expense_description, vendor_name)
-                VALUES (%s, %s, %s, %s, %s, %s, NULL, 0, '未收', 'extra', %s, %s, %s)
+                 expense_category, expense_description, vendor_name, accounting_period)
+                VALUES (%s, %s, %s, %s, %s, %s, NULL, 0, '未收', 'extra', %s, %s, %s, %s)
                 RETURNING id, contract_code, customer_code, customer_name, service_date,
                           service_type, total_amount, adjusted_amount, paid_amount,
                           payment_status, expense_source, expense_category,
-                          expense_description, vendor_name
+                          expense_description, vendor_name, accounting_period
             """, (
                 payload.contract_code,
                 customer_code,
@@ -626,6 +645,7 @@ def create_extra_expense(payload: ExtraExpenseCreate):
                 category,
                 description,
                 vendor_name,
+                accounting_period,
             ))
             row = cur.fetchone()
             conn.commit()
@@ -646,6 +666,7 @@ def create_extra_expense(payload: ExtraExpenseCreate):
                 "expense_category": row[11],
                 "description": row[12],
                 "vendor_name": row[13],
+                "accounting_period": row[14],
             }
     except HTTPException:
         conn.rollback()
@@ -686,6 +707,7 @@ def update_extra_expense(expense_id: int, payload: ExtraExpenseCreate):
             description = payload.description.strip()
             vendor_name = payload.vendor_name.strip() if payload.vendor_name else None
             payment_status = _calculate_service_status(payload.amount, paid_amount)
+            accounting_period = accounting_period_for_date(payload.service_date)
 
             cur.execute("""
                 UPDATE service_expense
@@ -703,12 +725,13 @@ def update_extra_expense(expense_id: int, payload: ExtraExpenseCreate):
                     expense_category = %s,
                     expense_description = %s,
                     vendor_name = %s,
+                    accounting_period = %s,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
                 RETURNING id, contract_code, customer_code, customer_name, service_date,
                           service_type, total_amount, adjusted_amount, paid_amount,
                           payment_status, expense_source, expense_category,
-                          expense_description, vendor_name
+                          expense_description, vendor_name, accounting_period
             """, (
                 payload.contract_code,
                 customer_code,
@@ -721,6 +744,7 @@ def update_extra_expense(expense_id: int, payload: ExtraExpenseCreate):
                 category,
                 description,
                 vendor_name,
+                accounting_period,
                 expense_id,
             ))
             row = cur.fetchone()
@@ -742,6 +766,7 @@ def update_extra_expense(expense_id: int, payload: ExtraExpenseCreate):
                 "expense_category": row[11],
                 "description": row[12],
                 "vendor_name": row[13],
+                "accounting_period": row[14],
             }
     except HTTPException:
         conn.rollback()

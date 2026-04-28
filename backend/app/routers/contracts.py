@@ -2,6 +2,7 @@
 from datetime import date
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
+from app.accounting_period import apply_accounting_period_filter
 from app.database import get_connection, get_cursor
 from app.models.contract import (
     ContractLeasing, ContractBuyout,
@@ -103,11 +104,21 @@ def _validate_buyout_receivable_fields(contract: ContractBuyoutCreate):
         raise HTTPException(status_code=400, detail="買斷合約要生成應收帳款時，請填寫成交金額")
 
 @router.get("/leasing", response_model=List[ContractLeasing])
-def get_leasing_contracts(search: Optional[str] = Query(None)):
+def get_leasing_contracts(
+    search: Optional[str] = Query(None),
+    accounting_period: Optional[str] = Query("current", description="帳務期間：current/prior/all"),
+):
     """取得租賃合約列表"""
+    where_parts = []
+    params = []
+    apply_accounting_period_filter(where_parts, params, "accounting_period", accounting_period)
+    if search:
+        where_parts.append("(contract_code ILIKE %s OR customer_name ILIKE %s)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
+
     with get_cursor() as cur:
-        if search:
-            cur.execute("""
+        cur.execute(f"""
                 SELECT id, contract_code, customer_code, customer_name, start_date,
                        model, quantity, monthly_rent, payment_cycle_months, overprint,
                        contract_months, sales_company_code, sales_amount,
@@ -115,49 +126,38 @@ def get_leasing_contracts(search: Optional[str] = Query(None)):
                        sales_payment_status, service_payment_status, status, needs_invoice,
                        created_at, updated_at
                 FROM contracts_leasing
-                WHERE contract_code ILIKE %s OR customer_name ILIKE %s
+                {where_clause}
                 ORDER BY contract_code
-            """, (f"%{search}%", f"%{search}%"))
-        else:
-            cur.execute("""
-                SELECT id, contract_code, customer_code, customer_name, start_date,
-                       model, quantity, monthly_rent, payment_cycle_months, overprint,
-                       contract_months, sales_company_code, sales_amount,
-                       service_company_code, service_amount,
-                       sales_payment_status, service_payment_status, status, needs_invoice,
-                       created_at, updated_at
-                FROM contracts_leasing
-                ORDER BY contract_code
-            """)
+            """, tuple(params))
         rows = cur.fetchall()
     
     return [_leasing_row_to_contract(r) for r in rows]
 
 @router.get("/buyout", response_model=List[ContractBuyout])
-def get_buyout_contracts(search: Optional[str] = Query(None)):
+def get_buyout_contracts(
+    search: Optional[str] = Query(None),
+    accounting_period: Optional[str] = Query("current", description="帳務期間：current/prior/all"),
+):
     """取得買斷合約列表"""
+    where_parts = []
+    params = []
+    apply_accounting_period_filter(where_parts, params, "accounting_period", accounting_period)
+    if search:
+        where_parts.append("(contract_code ILIKE %s OR customer_name ILIKE %s)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
+
     with get_cursor() as cur:
-        if search:
-            cur.execute("""
+        cur.execute(f"""
                 SELECT id, contract_code, customer_code, customer_name, deal_date,
                        deal_amount, sales_company_code, sales_amount,
                        service_company_code, service_amount,
                        sales_payment_status, service_payment_status, status, needs_invoice,
                        created_at, updated_at
                 FROM contracts_buyout
-                WHERE contract_code ILIKE %s OR customer_name ILIKE %s
+                {where_clause}
                 ORDER BY contract_code
-            """, (f"%{search}%", f"%{search}%"))
-        else:
-            cur.execute("""
-                SELECT id, contract_code, customer_code, customer_name, deal_date,
-                       deal_amount, sales_company_code, sales_amount,
-                       service_company_code, service_amount,
-                       sales_payment_status, service_payment_status, status, needs_invoice,
-                       created_at, updated_at
-                FROM contracts_buyout
-                ORDER BY contract_code
-            """)
+            """, tuple(params))
         rows = cur.fetchall()
     
     return [_buyout_row_to_contract(r) for r in rows]
@@ -203,7 +203,8 @@ def create_leasing_contract(contract: ContractLeasingCreate):
                 contract.contract_code, contract.customer_code, customer_name,
                 contract.sales_company_code, contract.sales_amount,
                 contract.service_company_code, contract.service_amount,
-                conn
+                conn,
+                effective_date=contract.start_date,
             )
             
             conn.commit()
@@ -259,7 +260,8 @@ def create_buyout_contract(contract: ContractBuyoutCreate):
                 contract.contract_code, contract.customer_code, customer_name,
                 contract.sales_company_code, contract.sales_amount,
                 contract.service_company_code, contract.service_amount,
-                conn
+                conn,
+                effective_date=contract.deal_date,
             )
             
             conn.commit()
@@ -356,7 +358,8 @@ def update_leasing_contract(contract_code: str, contract: ContractLeasingCreate)
                 new_contract_code, contract.customer_code, customer_name,
                 contract.sales_company_code, contract.sales_amount,
                 contract.service_company_code, contract.service_amount,
-                conn
+                conn,
+                effective_date=contract.start_date,
             )
             
             conn.commit()
@@ -445,7 +448,8 @@ def update_buyout_contract(contract_code: str, contract: ContractBuyoutCreate):
                 new_contract_code, contract.customer_code, customer_name,
                 contract.sales_company_code, contract.sales_amount,
                 contract.service_company_code, contract.service_amount,
-                conn
+                conn,
+                effective_date=contract.deal_date,
             )
             
             conn.commit()
@@ -538,7 +542,8 @@ def resume_leasing_contract(contract_code: str, payload: ContractResume):
                 float(row[12]) if row[12] else None,
                 row[13],
                 float(row[14]) if row[14] else None,
-                conn
+                conn,
+                effective_date=resume_date,
             )
 
             conn.commit()
@@ -628,7 +633,8 @@ def resume_buyout_contract(contract_code: str, payload: ContractResume):
                 float(row[7]) if row[7] else None,
                 row[8],
                 float(row[9]) if row[9] else None,
-                conn
+                conn,
+                effective_date=resume_date,
             )
 
             conn.commit()
