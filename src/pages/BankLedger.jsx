@@ -13,7 +13,8 @@ import {
   Popconfirm,
   Select,
   Tag,
-  Divider
+  Divider,
+  AutoComplete
 } from 'antd'
 import {
   PlusOutlined,
@@ -28,6 +29,7 @@ import {
 import dayjs from 'dayjs'
 import {
   getBankLedger,
+  getBankLedgerPayers,
   createBankLedger,
   updateBankLedger,
   deleteBankLedger,
@@ -47,6 +49,7 @@ const ACCOUNTING_PERIOD_OPTIONS = [
 ]
 
 const formatMoney = (value) => `NT$ ${Number(value || 0).toLocaleString()}`
+const normalizeSearchText = (value) => String(value || '').trim().toLowerCase()
 
 function BankLedger() {
   const [searchText, setSearchText] = useState('')
@@ -61,6 +64,7 @@ function BankLedger() {
   const [reconcileLoading, setReconcileLoading] = useState(false)
   const [reconcilableReceivables, setReconcilableReceivables] = useState([])
   const [reconcilableServiceExpenses, setReconcilableServiceExpenses] = useState([])
+  const [payerOptions, setPayerOptions] = useState([])
   const [form] = Form.useForm()
   const [reconcileForm] = Form.useForm()
   const watchedLines = Form.useWatch('lines', reconcileForm) || []
@@ -79,9 +83,22 @@ function BankLedger() {
     }
   }
 
+  const loadPayerOptions = async () => {
+    try {
+      const payers = await getBankLedgerPayers()
+      setPayerOptions(payers.map((payer) => ({ value: payer })))
+    } catch (error) {
+      message.error('載入對象選項失敗：' + (error.response?.data?.detail || error.message))
+    }
+  }
+
   useEffect(() => {
     loadData()
   }, [dateRange, searchText, accountingPeriod])
+
+  useEffect(() => {
+    loadPayerOptions()
+  }, [])
 
   useEffect(() => {
     if (!isModalOpen) return
@@ -288,6 +305,7 @@ function BankLedger() {
       setEditingRecord(null)
       form.resetFields()
       loadData()
+      loadPayerOptions()
     } catch (error) {
       if (error.errorFields) return
       message.error((editingRecord ? '更新' : '新增') + '失敗：' + (error.response?.data?.detail || error.message))
@@ -437,7 +455,14 @@ function BankLedger() {
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item label="對象" name="payer">
-            <Input />
+            <AutoComplete
+              options={payerOptions}
+              filterOption={(inputValue, option) =>
+                normalizeSearchText(option?.value).includes(normalizeSearchText(inputValue))
+              }
+              placeholder="輸入或搜尋對象／匯款人"
+              allowClear
+            />
           </Form.Item>
           <Form.Item label="交易類型" name="transaction_type" rules={[{ required: true, message: '請選擇交易類型' }]}>
             <Radio.Group>

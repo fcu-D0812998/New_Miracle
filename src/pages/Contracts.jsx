@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Tabs, Table, Button, Input, Space, Modal, Form, InputNumber, DatePicker, Select, message, Popconfirm, Tag, Switch } from 'antd'
+import { Tabs, Table, Button, Input, Space, Modal, Form, InputNumber, DatePicker, Select, message, Popconfirm, Tag, Switch, AutoComplete } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { 
@@ -19,6 +19,7 @@ const ACCOUNTING_PERIOD_OPTIONS = [
   { value: 'all', label: '全部' }
 ]
 const CONTRACT_STATUS_ORDER = { active: 0, paused: 1 }
+const normalizeSearchText = (value) => String(value || '').trim().toLowerCase()
 
 function Contracts() {
   const [searchText, setSearchText] = useState('')
@@ -42,7 +43,13 @@ function Contracts() {
         getCompanies('sales'),
         getCompanies('service')
       ])
-      setCustomers(customersData.map(c => ({ value: c.customer_code, label: c.name })))
+      setCustomers(customersData.map(c => ({
+        value: c.name || c.customer_code,
+        label: `${c.name || c.customer_code}（${c.customer_code}）`,
+        searchText: `${c.name || ''} ${c.customer_code || ''}`,
+        customer_code: c.customer_code,
+        name: c.name
+      })))
       setSalesCompanies(salesData.map(c => ({ value: c.company_code, label: c.name })))
       setServiceCompanies(serviceData.map(c => ({ value: c.company_code, label: c.name })))
     } catch (error) {
@@ -93,6 +100,7 @@ function Contracts() {
         if (editingRecord.type === 'leasing') {
           const formValues = {
             ...editingRecord,
+            customer_code: editingRecord.customer_name || editingRecord.customer_code,
             start_date: editingRecord.start_date ? dayjs(editingRecord.start_date) : null,
             needs_invoice: editingRecord.needs_invoice ?? false
           }
@@ -100,6 +108,7 @@ function Contracts() {
         } else if (editingRecord.type === 'buyout') {
           const formValues = {
             ...editingRecord,
+            customer_code: editingRecord.customer_name || editingRecord.customer_code,
             deal_date: editingRecord.deal_date ? dayjs(editingRecord.deal_date) : null,
             needs_invoice: editingRecord.needs_invoice ?? false
           }
@@ -140,6 +149,18 @@ function Contracts() {
     if (editingRecord?.type !== 'leasing' || salesAmountTouched) return
     form.setFieldValue('sales_amount', getDefaultLeasingSalesAmount(value))
   }
+
+  const resolveCustomerInput = (value) => {
+    const normalized = normalizeSearchText(value)
+    const matchedCustomer = customers.find((customer) =>
+      normalizeSearchText(customer.name) === normalized
+      || normalizeSearchText(customer.customer_code) === normalized
+    )
+    return matchedCustomer?.customer_code || value
+  }
+
+  const customerFilterOption = (inputValue, option) =>
+    normalizeSearchText(option?.searchText || option?.label || option?.value).includes(normalizeSearchText(inputValue))
 
   const leasingColumns = [
     { title: '合約編號', dataIndex: 'contract_code', key: 'contract_code', width: 120, sorter: textSorter('contract_code') },
@@ -240,8 +261,8 @@ function Contracts() {
     )
     form.resetFields()
     const formValues = type === 'leasing' 
-      ? { ...record, start_date: dayjs(record.start_date), needs_invoice: record.needs_invoice ?? false }
-      : { ...record, deal_date: dayjs(record.deal_date), needs_invoice: record.needs_invoice ?? false }
+      ? { ...record, customer_code: record.customer_name || record.customer_code, start_date: dayjs(record.start_date), needs_invoice: record.needs_invoice ?? false }
+      : { ...record, customer_code: record.customer_name || record.customer_code, deal_date: dayjs(record.deal_date), needs_invoice: record.needs_invoice ?? false }
     form.setFieldsValue(formValues)
     setIsModalOpen(true)
   }
@@ -312,6 +333,7 @@ function Contracts() {
       const values = await form.validateFields()
       const submitData = {
         ...values,
+        customer_code: resolveCustomerInput(values.customer_code),
         start_date: values.start_date ? values.start_date.format('YYYY-MM-DD') : null,
         deal_date: values.deal_date ? values.deal_date.format('YYYY-MM-DD') : null
       }
@@ -353,7 +375,12 @@ function Contracts() {
         <Input />
       </Form.Item>
       <Form.Item label="客戶名稱" name="customer_code" rules={[{ required: true }]}>
-        <Select options={customers} />
+        <AutoComplete
+          options={customers}
+          filterOption={customerFilterOption}
+          placeholder="輸入或搜尋客戶名稱"
+          allowClear
+        />
       </Form.Item>
       <Space.Compact style={{ width: '100%' }}>
         <Form.Item label="合約起始日" name="start_date" rules={[{ required: true }]} style={{ flex: 1 }}>
@@ -411,7 +438,12 @@ function Contracts() {
         <Input />
       </Form.Item>
       <Form.Item label="客戶名稱" name="customer_code" rules={[{ required: true }]}>
-        <Select options={customers} />
+        <AutoComplete
+          options={customers}
+          filterOption={customerFilterOption}
+          placeholder="輸入或搜尋客戶名稱"
+          allowClear
+        />
       </Form.Item>
       <Space.Compact style={{ width: '100%' }}>
         <Form.Item label="成交日期" name="deal_date" rules={[{ required: true }]} style={{ flex: 1 }}>

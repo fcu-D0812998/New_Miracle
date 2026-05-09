@@ -345,6 +345,27 @@ def get_bank_ledger(
         return [_row_to_ledger(row, line_map) for row in rows]
 
 
+@router.get("/payers", response_model=List[str])
+def get_bank_ledger_payers(
+    search: Optional[str] = Query(None, description="搜尋對象/匯款人"),
+):
+    where_parts = ["NULLIF(TRIM(payer), '') IS NOT NULL"]
+    params = []
+    if search:
+        where_parts.append("payer ILIKE %s")
+        params.append(f"%{search}%")
+    where_clause = " WHERE " + " AND ".join(where_parts)
+
+    with get_cursor() as cur:
+        cur.execute(f"""
+            SELECT DISTINCT TRIM(payer) AS payer_name
+            FROM bank_ledger
+            {where_clause}
+            ORDER BY payer_name
+        """, tuple(params))
+        return [row[0] for row in cur.fetchall()]
+
+
 @router.post("", response_model=dict, status_code=201)
 def create_bank_ledger(ledger: BankLedgerCreate):
     conn = get_connection()

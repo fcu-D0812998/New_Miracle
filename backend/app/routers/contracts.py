@@ -1,6 +1,7 @@
 """合約管理 API - 統一處理租賃/買斷，消除特殊情況"""
-from datetime import date
+from datetime import date, timedelta
 from fastapi import APIRouter, HTTPException, Query
+import re
 from typing import List, Optional
 from app.accounting_period import apply_accounting_period_filter
 from app.database import get_connection, get_cursor
@@ -81,12 +82,26 @@ def _delete_service_expenses(cur, contract_code: str):
     """, (contract_code,))
 
 
-def get_customer_name(customer_code: str, conn) -> str:
-    """取得客戶名稱"""
+def resolve_customer(customer_input: str, conn) -> tuple[str, str]:
+    """允許前端傳入客戶代碼或精準客戶名稱，統一轉回資料庫使用的客戶代碼。"""
+    keyword = (customer_input or "").strip()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="請輸入客戶名稱")
+
     with conn.cursor() as cur:
-        cur.execute("SELECT name FROM customers WHERE customer_code = %s", (customer_code,))
+        cur.execute("""
+            SELECT customer_code, name
+            FROM customers
+            WHERE LOWER(customer_code) = LOWER(%s)
+               OR LOWER(name) = LOWER(%s)
+            ORDER BY CASE WHEN LOWER(customer_code) = LOWER(%s) THEN 0 ELSE 1 END,
+                     customer_code
+            LIMIT 1
+        """, (keyword, keyword, keyword))
         row = cur.fetchone()
-        return row[0] if row else ""
+        if not row:
+            raise HTTPException(status_code=400, detail="找不到客戶，請先建立客戶資料或從清單選擇")
+        return row[0], row[1]
 
 
 def _validate_leasing_receivable_fields(contract: ContractLeasingCreate):
@@ -102,6 +117,45 @@ def _validate_leasing_receivable_fields(contract: ContractLeasingCreate):
 def _validate_buyout_receivable_fields(contract: ContractBuyoutCreate):
     if contract.deal_amount is None:
         raise HTTPException(status_code=400, detail="買斷合約要生成應收帳款時，請填寫成交金額")
+
+
+def _leasing_end_date(start_date: date, contract_months: Optional[int]) -> date:
+    if not start_date:
+        raise HTTPException(status_code=400, detail="合約起始日不存在，無法續約")
+    if not contract_months or contract_months <= 0:
+        raise HTTPException(status_code=400, detail="合約期數需大於 0，無法續約")
+
+    from app.utils.date_utils import add_months, subtract_days
+    return subtract_days(add_months(start_date, contract_months), 1)
+
+
+def _renewal_base_code(contract_code: str) -> str:
+    match = re.match(r"^(.*)-R\d+$", contract_code)
+    return match.group(1) if match else contract_code
+
+
+def _next_renewal_contract_code(cur, contract_code: str) -> str:
+    base_code = _renewal_base_code(contract_code)
+    cur.execute("""
+        SELECT contract_code
+        FROM contracts_leasing
+        WHERE contract_code = %s OR contract_code LIKE %s
+        UNION
+        SELECT contract_code
+        FROM contracts_buyout
+        WHERE contract_code = %s OR contract_code LIKE %s
+    """, (base_code, f"{base_code}-R%", base_code, f"{base_code}-R%"))
+
+    max_sequence = 0
+    suffix_pattern = re.compile(rf"^{re.escape(base_code)}-R(\d+)$")
+    for row in cur.fetchall():
+        existing_code = row[0]
+        match = suffix_pattern.match(existing_code)
+        if match:
+            max_sequence = max(max_sequence, int(match.group(1)))
+
+    return f"{base_code}-R{max_sequence + 1}"
+
 
 @router.get("/leasing", response_model=List[ContractLeasing])
 def get_leasing_contracts(
@@ -162,6 +216,64 @@ def get_buyout_contracts(
     
     return [_buyout_row_to_contract(r) for r in rows]
 
+
+@router.get("/leasing/expiring-this-year")
+def get_leasing_contracts_expiring_this_year(
+    year: Optional[int] = Query(None, description="到期年度，預設今年"),
+):
+    """取得指定年度到期的租賃合約。"""
+    target_year = year or date.today().year
+    year_start = date(target_year, 1, 1)
+    year_end = date(target_year, 12, 31)
+
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, contract_code, customer_code, customer_name, start_date,
+                   ((start_date + make_interval(months => contract_months))::date - 1) AS end_date,
+                   model, quantity, monthly_rent, payment_cycle_months, overprint,
+                   contract_months, sales_company_code, sales_amount,
+                   service_company_code, service_amount,
+                   sales_payment_status, service_payment_status, status, needs_invoice,
+                   created_at, updated_at
+            FROM contracts_leasing
+            WHERE start_date IS NOT NULL
+              AND contract_months IS NOT NULL
+              AND contract_months > 0
+              AND ((start_date + make_interval(months => contract_months))::date - 1)
+                    BETWEEN %s AND %s
+            ORDER BY end_date, contract_code
+        """, (year_start, year_end))
+        rows = cur.fetchall()
+
+    return [
+        {
+            "id": row[0],
+            "contract_code": row[1],
+            "customer_code": row[2],
+            "customer_name": row[3],
+            "start_date": row[4],
+            "end_date": row[5],
+            "model": row[6],
+            "quantity": row[7],
+            "monthly_rent": float(row[8]) if row[8] is not None else None,
+            "payment_cycle_months": row[9],
+            "overprint": row[10],
+            "contract_months": row[11],
+            "sales_company_code": row[12],
+            "sales_amount": float(row[13]) if row[13] is not None else None,
+            "service_company_code": row[14],
+            "service_amount": float(row[15]) if row[15] is not None else None,
+            "sales_payment_status": row[16],
+            "service_payment_status": row[17],
+            "status": row[18],
+            "needs_invoice": bool(row[19]),
+            "created_at": row[20],
+            "updated_at": row[21],
+        }
+        for row in rows
+    ]
+
+
 @router.post("/leasing", response_model=ContractLeasing, status_code=201)
 def create_leasing_contract(contract: ContractLeasingCreate):
     """新增租賃合約（自動生成應收帳款）"""
@@ -169,7 +281,7 @@ def create_leasing_contract(contract: ContractLeasingCreate):
     try:
         with conn.cursor() as cur:
             _validate_leasing_receivable_fields(contract)
-            customer_name = get_customer_name(contract.customer_code, conn)
+            customer_code, customer_name = resolve_customer(contract.customer_code, conn)
             
             monthly_rent = contract.monthly_rent
             
@@ -180,7 +292,7 @@ def create_leasing_contract(contract: ContractLeasingCreate):
                  sales_company_code, sales_amount, service_company_code, service_amount, needs_invoice)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                contract.contract_code, contract.customer_code, customer_name,
+                contract.contract_code, customer_code, customer_name,
                 contract.start_date, contract.model, contract.quantity,
                 monthly_rent, contract.payment_cycle_months,
                 contract.overprint, contract.contract_months,
@@ -191,7 +303,7 @@ def create_leasing_contract(contract: ContractLeasingCreate):
             
             if monthly_rent and contract.contract_months:
                 generate_leasing_ar(
-                    contract.contract_code, contract.customer_code, customer_name,
+                    contract.contract_code, customer_code, customer_name,
                     contract.start_date, monthly_rent,
                     contract.payment_cycle_months, contract.contract_months, conn,
                     needs_invoice=contract.needs_invoice
@@ -199,7 +311,7 @@ def create_leasing_contract(contract: ContractLeasingCreate):
             
             # 生成服務費用
             generate_service_expenses_for_leasing(
-                contract.contract_code, contract.customer_code, customer_name,
+                contract.contract_code, customer_code, customer_name,
                 contract.sales_company_code, contract.sales_amount,
                 contract.service_company_code, contract.service_amount,
                 conn,
@@ -222,6 +334,91 @@ def create_leasing_contract(contract: ContractLeasingCreate):
     finally:
         conn.close()
 
+
+@router.post("/leasing/{contract_code}/renew", response_model=ContractLeasing, status_code=201)
+def renew_leasing_contract(contract_code: str):
+    """依原租賃合約建立下一期續約合約，原合約不異動。"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            original = _fetch_leasing(cur, contract_code, for_update=True)
+            if not original:
+                raise HTTPException(status_code=404, detail="合約不存在")
+            if original[17] != "active":
+                raise HTTPException(status_code=400, detail="只有使用中的合約可以續約")
+
+            original_start_date = original[4]
+            contract_months = original[10]
+            original_end_date = _leasing_end_date(original_start_date, contract_months)
+            new_start_date = original_end_date + timedelta(days=1)
+            new_contract_code = _next_renewal_contract_code(cur, contract_code)
+
+            cur.execute("""
+                INSERT INTO contracts_leasing
+                (contract_code, customer_code, customer_name, start_date, model,
+                 quantity, monthly_rent, payment_cycle_months, overprint, contract_months,
+                 sales_company_code, sales_amount, service_company_code, service_amount, needs_invoice)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                new_contract_code,
+                original[2],
+                original[3],
+                new_start_date,
+                original[5],
+                original[6],
+                original[7],
+                original[8],
+                original[9],
+                original[10],
+                original[11],
+                original[12],
+                original[13],
+                original[14],
+                bool(original[18]),
+            ))
+
+            monthly_rent = float(original[7]) if original[7] is not None else None
+            if monthly_rent and contract_months:
+                generate_leasing_ar(
+                    new_contract_code,
+                    original[2],
+                    original[3],
+                    new_start_date,
+                    monthly_rent,
+                    original[8],
+                    contract_months,
+                    conn,
+                    needs_invoice=bool(original[18]),
+                )
+
+            generate_service_expenses_for_leasing(
+                new_contract_code,
+                original[2],
+                original[3],
+                original[11],
+                float(original[12]) if original[12] is not None else None,
+                original[13],
+                float(original[14]) if original[14] is not None else None,
+                conn,
+                effective_date=new_start_date,
+            )
+
+            conn.commit()
+            row = _fetch_leasing(cur, new_contract_code)
+            if not row:
+                raise HTTPException(status_code=500, detail="續約合約讀取失敗")
+            return _leasing_row_to_contract(row)
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        if "unique" in str(e).lower():
+            raise HTTPException(status_code=400, detail="續約合約編號已存在，請重試")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
 @router.post("/buyout", response_model=ContractBuyout, status_code=201)
 def create_buyout_contract(contract: ContractBuyoutCreate):
     """新增買斷合約（自動生成應收帳款）"""
@@ -229,7 +426,7 @@ def create_buyout_contract(contract: ContractBuyoutCreate):
     try:
         with conn.cursor() as cur:
             _validate_buyout_receivable_fields(contract)
-            customer_name = get_customer_name(contract.customer_code, conn)
+            customer_code, customer_name = resolve_customer(contract.customer_code, conn)
             
             deal_amount = contract.deal_amount
             
@@ -239,7 +436,7 @@ def create_buyout_contract(contract: ContractBuyoutCreate):
                  sales_company_code, sales_amount, service_company_code, service_amount, needs_invoice)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                contract.contract_code, contract.customer_code, customer_name,
+                contract.contract_code, customer_code, customer_name,
                 contract.deal_date, deal_amount,
                 contract.sales_company_code, contract.sales_amount,
                 contract.service_company_code, contract.service_amount,
@@ -248,14 +445,14 @@ def create_buyout_contract(contract: ContractBuyoutCreate):
             
             if deal_amount:
                 generate_buyout_ar(
-                    contract.contract_code, contract.customer_code, customer_name,
+                    contract.contract_code, customer_code, customer_name,
                     contract.deal_date, deal_amount, conn,
                     needs_invoice=contract.needs_invoice
                 )
             
             # 生成服務費用
             generate_service_expenses_for_buyout(
-                contract.contract_code, contract.customer_code, customer_name,
+                contract.contract_code, customer_code, customer_name,
                 contract.sales_company_code, contract.sales_amount,
                 contract.service_company_code, contract.service_amount,
                 conn,
@@ -285,7 +482,7 @@ def update_leasing_contract(contract_code: str, contract: ContractLeasingCreate)
     try:
         with conn.cursor() as cur:
             _validate_leasing_receivable_fields(contract)
-            customer_name = get_customer_name(contract.customer_code, conn)
+            customer_code, customer_name = resolve_customer(contract.customer_code, conn)
             new_contract_code = contract.contract_code
             code_changed = new_contract_code != contract_code
 
@@ -316,7 +513,7 @@ def update_leasing_contract(contract_code: str, contract: ContractLeasingCreate)
                          status, created_at, updated_at
             """, (
                 new_contract_code,
-                contract.customer_code, customer_name, contract.start_date,
+                customer_code, customer_name, contract.start_date,
                 contract.model, contract.quantity, monthly_rent,
                 contract.payment_cycle_months, contract.overprint, contract.contract_months,
                 contract.sales_company_code, contract.sales_amount,
@@ -332,7 +529,7 @@ def update_leasing_contract(contract_code: str, contract: ContractLeasingCreate)
             if should_generate:
                 cur.execute("DELETE FROM ar_leasing WHERE contract_code IN (%s, %s)", (contract_code, new_contract_code))
                 generate_leasing_ar(
-                    new_contract_code, contract.customer_code, customer_name,
+                    new_contract_code, customer_code, customer_name,
                     contract.start_date, monthly_rent,
                     contract.payment_cycle_months, contract.contract_months, conn,
                     needs_invoice=contract.needs_invoice
@@ -352,7 +549,7 @@ def update_leasing_contract(contract_code: str, contract: ContractLeasingCreate)
             
             # 生成/更新服務費用
             generate_service_expenses_for_leasing(
-                new_contract_code, contract.customer_code, customer_name,
+                new_contract_code, customer_code, customer_name,
                 contract.sales_company_code, contract.sales_amount,
                 contract.service_company_code, contract.service_amount,
                 conn,
@@ -379,7 +576,7 @@ def update_buyout_contract(contract_code: str, contract: ContractBuyoutCreate):
     try:
         with conn.cursor() as cur:
             _validate_buyout_receivable_fields(contract)
-            customer_name = get_customer_name(contract.customer_code, conn)
+            customer_code, customer_name = resolve_customer(contract.customer_code, conn)
             new_contract_code = contract.contract_code
             code_changed = new_contract_code != contract_code
 
@@ -408,7 +605,7 @@ def update_buyout_contract(contract_code: str, contract: ContractBuyoutCreate):
                          status, created_at, updated_at
             """, (
                 new_contract_code,
-                contract.customer_code, customer_name, contract.deal_date,
+                customer_code, customer_name, contract.deal_date,
                 deal_amount, contract.sales_company_code, contract.sales_amount,
                 contract.service_company_code, contract.service_amount,
                 contract.needs_invoice,
@@ -422,7 +619,7 @@ def update_buyout_contract(contract_code: str, contract: ContractBuyoutCreate):
             if should_generate:
                 cur.execute("DELETE FROM ar_buyout WHERE contract_code IN (%s, %s)", (contract_code, new_contract_code))
                 generate_buyout_ar(
-                    new_contract_code, contract.customer_code, customer_name,
+                    new_contract_code, customer_code, customer_name,
                     contract.deal_date, deal_amount, conn,
                     needs_invoice=contract.needs_invoice
                 )
@@ -441,7 +638,7 @@ def update_buyout_contract(contract_code: str, contract: ContractBuyoutCreate):
             
             # 生成/更新服務費用
             generate_service_expenses_for_buyout(
-                new_contract_code, contract.customer_code, customer_name,
+                new_contract_code, customer_code, customer_name,
                 contract.sales_company_code, contract.sales_amount,
                 contract.service_company_code, contract.service_amount,
                 conn,

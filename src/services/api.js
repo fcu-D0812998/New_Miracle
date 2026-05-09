@@ -52,6 +52,9 @@ export const getLeasingContracts = (search, accountingPeriod = 'current') =>
 export const getBuyoutContracts = (search, accountingPeriod = 'current') =>
   api.get('/contracts/buyout', { params: { search, accounting_period: accountingPeriod } }).then(res => res.data)
 
+export const getExpiringLeasingContracts = (year) =>
+  api.get('/contracts/leasing/expiring-this-year', { params: { year } }).then(res => res.data)
+
 export const createLeasingContract = (data) => 
   api.post('/contracts/leasing', data).then(res => res.data)
 
@@ -75,6 +78,9 @@ export const pauseLeasingContract = (contractCode) =>
 
 export const resumeLeasingContract = (contractCode, data = {}) =>
   api.post(`/contracts/leasing/${contractCode}/resume`, data).then(res => res.data)
+
+export const renewLeasingContract = (contractCode) =>
+  api.post(`/contracts/leasing/${contractCode}/renew`).then(res => res.data)
 
 export const pauseBuyoutContract = (contractCode) =>
   api.post(`/contracts/buyout/${contractCode}/pause`).then(res => res.data)
@@ -113,6 +119,9 @@ export const deleteExtraExpense = (id) =>
 // 銀行帳本
 export const getBankLedger = (fromDate, toDate, search, accountingPeriod = 'current') =>
   api.get('/bank-ledger', { params: { from_date: fromDate, to_date: toDate, search, accounting_period: accountingPeriod } }).then(res => res.data)
+
+export const getBankLedgerPayers = (search) =>
+  api.get('/bank-ledger/payers', { params: { search } }).then(res => res.data)
 
 export const createBankLedger = (data) => 
   api.post('/bank-ledger', data).then(res => res.data)
