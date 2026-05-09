@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.accounting_period import accounting_period_for_date, apply_accounting_period_filter
+from app.billing import apply_invoice_tax, calculate_receivable_status, invoice_tax_amount
 from app.database import get_connection, get_cursor
 
 router = APIRouter()
@@ -71,6 +72,10 @@ def _to_float(value) -> float:
     return float(value) if value is not None else 0.0
 
 
+def _round_money(value) -> float:
+    return round(_to_float(value), 2)
+
+
 def _normalize_ar_type(ar_type: Optional[str]) -> Optional[str]:
     if not ar_type:
         return None
@@ -82,14 +87,9 @@ def _normalize_ar_type(ar_type: Optional[str]) -> Optional[str]:
     return None
 
 
-def _calculate_receivable_status(amount: float, fee: float, received_amount: float) -> str:
-    total_due = max(_to_float(amount), 0.0) + max(_to_float(fee), 0.0)
-    received = max(_to_float(received_amount), 0.0)
-    if received >= total_due and total_due > 0:
-        return RECEIVABLE_PAID
-    if received > 0:
-        return RECEIVABLE_PARTIAL
-    return RECEIVABLE_UNPAID
+def _calculate_receivable_status(amount: float, fee: float, received_amount: float,
+                                 needs_invoice: bool = False) -> str:
+    return calculate_receivable_status(amount, fee, received_amount, needs_invoice)
 
 
 def _calculate_service_status(amount: float, paid_amount: float) -> str:
@@ -463,81 +463,106 @@ def get_reconcilable_receivables(
     result = []
     with get_cursor() as cur:
         if not type or type == "租賃":
-            where_parts = ["payment_status IN ('未收', '部分收款')"]
+            where_parts = ["al.payment_status IN ('未收', '部分收款')"]
             params = []
             if search:
-                where_parts.append("(contract_code ILIKE %s OR customer_name ILIKE %s)")
+                where_parts.append("(al.contract_code ILIKE %s OR al.customer_name ILIKE %s)")
                 params.extend([f"%{search}%", f"%{search}%"])
-            apply_accounting_period_filter(where_parts, params, "accounting_period", accounting_period)
+            apply_accounting_period_filter(where_parts, params, "al.accounting_period", accounting_period)
             cur.execute(f"""
                 SELECT
-                    id,
+                    al.id,
                     '租賃' AS type,
-                    contract_code,
-                    customer_code,
-                    customer_name,
-                    start_date AS date,
-                    end_date,
-                    total_rent AS original_amount,
-                    adjusted_amount,
-                    COALESCE(adjusted_amount, total_rent) AS amount,
-                    fee,
-                    received_amount,
-                    payment_status,
-                    (COALESCE(adjusted_amount, total_rent) + COALESCE(fee, 0) - COALESCE(received_amount, 0)) AS unpaid_amount,
-                    COALESCE(accounting_period, 'current') AS accounting_period
-                FROM ar_leasing
+                    al.contract_code,
+                    al.customer_code,
+                    al.customer_name,
+                    al.start_date AS date,
+                    al.end_date,
+                    al.total_rent AS untaxed_original_amount,
+                    al.adjusted_amount AS untaxed_adjusted_amount,
+                    al.fee,
+                    al.received_amount,
+                    al.payment_status,
+                    COALESCE(al.accounting_period, 'current') AS accounting_period,
+                    COALESCE(cl.needs_invoice, FALSE) AS needs_invoice
+                FROM ar_leasing al
+                LEFT JOIN contracts_leasing cl ON cl.contract_code = al.contract_code
                 WHERE {" AND ".join(where_parts)}
-                ORDER BY contract_code, start_date
+                ORDER BY al.contract_code, al.start_date
             """, tuple(params))
             result.extend(cur.fetchall())
 
         if not type or type == "買斷":
-            where_parts = ["payment_status IN ('未收', '部分收款')"]
+            where_parts = ["ab.payment_status IN ('未收', '部分收款')"]
             params = []
             if search:
-                where_parts.append("(contract_code ILIKE %s OR customer_name ILIKE %s)")
+                where_parts.append("(ab.contract_code ILIKE %s OR ab.customer_name ILIKE %s)")
                 params.extend([f"%{search}%", f"%{search}%"])
-            apply_accounting_period_filter(where_parts, params, "accounting_period", accounting_period)
+            apply_accounting_period_filter(where_parts, params, "ab.accounting_period", accounting_period)
             cur.execute(f"""
                 SELECT
-                    id,
+                    ab.id,
                     '買斷' AS type,
-                    contract_code,
-                    customer_code,
-                    customer_name,
-                    deal_date AS date,
+                    ab.contract_code,
+                    ab.customer_code,
+                    ab.customer_name,
+                    ab.deal_date AS date,
                     NULL AS end_date,
-                    total_amount AS original_amount,
-                    adjusted_amount,
-                    COALESCE(adjusted_amount, total_amount) AS amount,
-                    fee,
-                    received_amount,
-                    payment_status,
-                    (COALESCE(adjusted_amount, total_amount) + COALESCE(fee, 0) - COALESCE(received_amount, 0)) AS unpaid_amount,
-                    COALESCE(accounting_period, 'current') AS accounting_period
-                FROM ar_buyout
+                    ab.total_amount AS untaxed_original_amount,
+                    ab.adjusted_amount AS untaxed_adjusted_amount,
+                    ab.fee,
+                    ab.received_amount,
+                    ab.payment_status,
+                    COALESCE(ab.accounting_period, 'current') AS accounting_period,
+                    COALESCE(cb.needs_invoice, FALSE) AS needs_invoice
+                FROM ar_buyout ab
+                LEFT JOIN contracts_buyout cb ON cb.contract_code = ab.contract_code
                 WHERE {" AND ".join(where_parts)}
-                ORDER BY contract_code, deal_date
+                ORDER BY ab.contract_code, ab.deal_date
             """, tuple(params))
             result.extend(cur.fetchall())
 
     columns = [
         "id", "type", "contract_code", "customer_code", "customer_name",
-        "date", "end_date", "original_amount", "adjusted_amount", "amount",
-        "fee", "received_amount", "payment_status", "unpaid_amount", "accounting_period",
+        "date", "end_date", "untaxed_original_amount", "untaxed_adjusted_amount",
+        "fee", "received_amount", "payment_status", "accounting_period",
+        "needs_invoice",
     ]
     serialized = []
     for row in result:
         item = dict(zip(columns, row))
         item["date"] = item["date"].strftime("%Y-%m-%d") if item["date"] else None
         item["end_date"] = item["end_date"].strftime("%Y-%m-%d") if item["end_date"] else None
-        item["original_amount"] = _to_float(item["original_amount"])
-        item["adjusted_amount"] = _to_float(item["adjusted_amount"]) if item["adjusted_amount"] is not None else None
-        item["amount"] = _to_float(item["amount"])
+        needs_invoice = bool(item["needs_invoice"])
+        untaxed_original_amount = _to_float(item["untaxed_original_amount"])
+        untaxed_adjusted_amount = (
+            _to_float(item["untaxed_adjusted_amount"])
+            if item["untaxed_adjusted_amount"] is not None
+            else None
+        )
+        untaxed_effective_amount = (
+            untaxed_adjusted_amount
+            if untaxed_adjusted_amount is not None
+            else untaxed_original_amount
+        )
+        item["needs_invoice"] = needs_invoice
+        item["untaxed_original_amount"] = _round_money(untaxed_original_amount)
+        item["untaxed_adjusted_amount"] = (
+            _round_money(untaxed_adjusted_amount)
+            if untaxed_adjusted_amount is not None
+            else None
+        )
+        item["original_amount"] = _round_money(apply_invoice_tax(untaxed_original_amount, needs_invoice))
+        item["adjusted_amount"] = (
+            _round_money(apply_invoice_tax(untaxed_adjusted_amount, needs_invoice))
+            if untaxed_adjusted_amount is not None
+            else None
+        )
+        item["amount"] = _round_money(apply_invoice_tax(untaxed_effective_amount, needs_invoice))
+        item["tax_amount"] = _round_money(invoice_tax_amount(untaxed_effective_amount, needs_invoice))
         item["fee"] = _to_float(item["fee"])
         item["received_amount"] = _to_float(item["received_amount"])
-        item["unpaid_amount"] = _to_float(item["unpaid_amount"])
+        item["unpaid_amount"] = _round_money(max(item["amount"] + item["fee"] - item["received_amount"], 0.0))
         serialized.append(item)
     return serialized
 
@@ -726,17 +751,21 @@ def reconcile_bank_ledger(id: int, request: ReconcileRequest):
                     normalized_ar_type = item["ar_type"]
                     if normalized_ar_type == "租賃":
                         cur.execute("""
-                            SELECT total_rent, adjusted_amount, fee, received_amount
-                            FROM ar_leasing
-                            WHERE id = %s
-                            FOR UPDATE
+                            SELECT ar.total_rent, ar.adjusted_amount, ar.fee, ar.received_amount,
+                                   COALESCE(cl.needs_invoice, FALSE) AS needs_invoice
+                            FROM ar_leasing ar
+                            LEFT JOIN contracts_leasing cl ON cl.contract_code = ar.contract_code
+                            WHERE ar.id = %s
+                            FOR UPDATE OF ar
                         """, (item["target_id"],))
                     elif normalized_ar_type == "買斷":
                         cur.execute("""
-                            SELECT total_amount, adjusted_amount, fee, received_amount
-                            FROM ar_buyout
-                            WHERE id = %s
-                            FOR UPDATE
+                            SELECT ar.total_amount, ar.adjusted_amount, ar.fee, ar.received_amount,
+                                   COALESCE(cb.needs_invoice, FALSE) AS needs_invoice
+                            FROM ar_buyout ar
+                            LEFT JOIN contracts_buyout cb ON cb.contract_code = ar.contract_code
+                            WHERE ar.id = %s
+                            FOR UPDATE OF ar
                         """, (item["target_id"],))
                     else:
                         raise HTTPException(status_code=400, detail="應收帳款類型錯誤")
@@ -749,7 +778,9 @@ def reconcile_bank_ledger(id: int, request: ReconcileRequest):
                     adjusted_amount = _to_float(ar_row[1]) if ar_row[1] is not None else None
                     fee = _to_float(ar_row[2])
                     received_amount = _to_float(ar_row[3])
-                    effective_amount = adjusted_amount if adjusted_amount is not None else base_amount
+                    needs_invoice = bool(ar_row[4])
+                    effective_untaxed_amount = adjusted_amount if adjusted_amount is not None else base_amount
+                    effective_amount = apply_invoice_tax(effective_untaxed_amount, needs_invoice)
                     outstanding_after_fee = effective_amount + fee + item["fee_amount"] - received_amount
 
                     if item["allocated_amount"] > outstanding_after_fee + 0.000001:
@@ -757,7 +788,12 @@ def reconcile_bank_ledger(id: int, request: ReconcileRequest):
 
                     new_fee = fee + item["fee_amount"]
                     new_received = received_amount + item["allocated_amount"]
-                    new_status = _calculate_receivable_status(effective_amount, new_fee, new_received)
+                    new_status = _calculate_receivable_status(
+                        effective_untaxed_amount,
+                        new_fee,
+                        new_received,
+                        needs_invoice,
+                    )
 
                     if request.auto_update:
                         if normalized_ar_type == "租賃":
@@ -879,17 +915,21 @@ def _revert_legacy_reconciliation(cur, ledger_id: int, income: float, expense: f
         if revert:
             if normalized_ar_type == "租賃":
                 cur.execute("""
-                    SELECT total_rent, adjusted_amount, fee, received_amount
-                    FROM ar_leasing
-                    WHERE id = %s
-                    FOR UPDATE
+                    SELECT ar.total_rent, ar.adjusted_amount, ar.fee, ar.received_amount,
+                           COALESCE(cl.needs_invoice, FALSE) AS needs_invoice
+                    FROM ar_leasing ar
+                    LEFT JOIN contracts_leasing cl ON cl.contract_code = ar.contract_code
+                    WHERE ar.id = %s
+                    FOR UPDATE OF ar
                 """, (ar_id,))
             else:
                 cur.execute("""
-                    SELECT total_amount, adjusted_amount, fee, received_amount
-                    FROM ar_buyout
-                    WHERE id = %s
-                    FOR UPDATE
+                    SELECT ar.total_amount, ar.adjusted_amount, ar.fee, ar.received_amount,
+                           COALESCE(cb.needs_invoice, FALSE) AS needs_invoice
+                    FROM ar_buyout ar
+                    LEFT JOIN contracts_buyout cb ON cb.contract_code = ar.contract_code
+                    WHERE ar.id = %s
+                    FOR UPDATE OF ar
                 """, (ar_id,))
 
             ar_row = cur.fetchone()
@@ -898,10 +938,11 @@ def _revert_legacy_reconciliation(cur, ledger_id: int, income: float, expense: f
                 adjusted_amount = _to_float(ar_row[1]) if ar_row[1] is not None else None
                 fee = _to_float(ar_row[2])
                 received_amount = _to_float(ar_row[3])
+                needs_invoice = bool(ar_row[4])
                 effective_amount = adjusted_amount if adjusted_amount is not None else base_amount
                 new_fee = max(0.0, fee - reconciled_fee_amount)
                 new_received = max(0.0, received_amount - income)
-                new_status = _calculate_receivable_status(effective_amount, new_fee, new_received)
+                new_status = _calculate_receivable_status(effective_amount, new_fee, new_received, needs_invoice)
 
                 if normalized_ar_type == "租賃":
                     cur.execute("""
@@ -1006,17 +1047,21 @@ def unreconcile_bank_ledger(
                             normalized_ar_type = _normalize_ar_type(line_ar_type)
                             if normalized_ar_type == "租賃":
                                 cur.execute("""
-                                    SELECT total_rent, adjusted_amount, fee, received_amount
-                                    FROM ar_leasing
-                                    WHERE id = %s
-                                    FOR UPDATE
+                                    SELECT ar.total_rent, ar.adjusted_amount, ar.fee, ar.received_amount,
+                                           COALESCE(cl.needs_invoice, FALSE) AS needs_invoice
+                                    FROM ar_leasing ar
+                                    LEFT JOIN contracts_leasing cl ON cl.contract_code = ar.contract_code
+                                    WHERE ar.id = %s
+                                    FOR UPDATE OF ar
                                 """, (target_id,))
                             else:
                                 cur.execute("""
-                                    SELECT total_amount, adjusted_amount, fee, received_amount
-                                    FROM ar_buyout
-                                    WHERE id = %s
-                                    FOR UPDATE
+                                    SELECT ar.total_amount, ar.adjusted_amount, ar.fee, ar.received_amount,
+                                           COALESCE(cb.needs_invoice, FALSE) AS needs_invoice
+                                    FROM ar_buyout ar
+                                    LEFT JOIN contracts_buyout cb ON cb.contract_code = ar.contract_code
+                                    WHERE ar.id = %s
+                                    FOR UPDATE OF ar
                                 """, (target_id,))
 
                             ar_row = cur.fetchone()
@@ -1027,10 +1072,11 @@ def unreconcile_bank_ledger(
                             adjusted_amount = _to_float(ar_row[1]) if ar_row[1] is not None else None
                             fee = _to_float(ar_row[2])
                             received_amount = _to_float(ar_row[3])
+                            needs_invoice = bool(ar_row[4])
                             effective_amount = adjusted_amount if adjusted_amount is not None else base_amount
                             new_fee = max(0.0, fee - fee_amount)
                             new_received = max(0.0, received_amount - allocated_amount)
-                            new_status = _calculate_receivable_status(effective_amount, new_fee, new_received)
+                            new_status = _calculate_receivable_status(effective_amount, new_fee, new_received, needs_invoice)
 
                             if normalized_ar_type == "租賃":
                                 cur.execute("""

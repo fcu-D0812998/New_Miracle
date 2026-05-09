@@ -1,6 +1,7 @@
 """合約服務 - 處理應收帳款與服務費用產生邏輯。"""
 from datetime import date
 from app.accounting_period import accounting_period_for_date
+from app.billing import calculate_receivable_status
 from app.utils.date_utils import add_months, subtract_days
 
 RECEIVABLE_UNPAID = "未收"
@@ -10,16 +11,6 @@ RECEIVABLE_PAID = "已收款"
 
 def _to_float(value) -> float:
     return float(value) if value is not None else 0.0
-
-
-def _calculate_receivable_status(amount: float, fee: float, received_amount: float) -> str:
-    total_due = max(_to_float(amount), 0.0) + max(_to_float(fee), 0.0)
-    received = max(_to_float(received_amount), 0.0)
-    if received >= total_due and total_due > 0:
-        return RECEIVABLE_PAID
-    if received > 0:
-        return RECEIVABLE_PARTIAL
-    return RECEIVABLE_UNPAID
 
 
 def _calculate_service_status(amount: float, paid_amount: float) -> str:
@@ -34,7 +25,8 @@ def _calculate_service_status(amount: float, paid_amount: float) -> str:
 
 def generate_leasing_ar(contract_code: str, customer_code: str, customer_name: str,
                         start_date: date, monthly_rent: float,
-                        payment_cycle_months: int, contract_months: int, conn):
+                        payment_cycle_months: int, contract_months: int, conn,
+                        needs_invoice: bool = False):
     """產生租賃應收帳款，並盡量保留既有的人工調整與收款資訊。"""
     with conn.cursor() as cur:
         cur.execute("""
@@ -66,7 +58,7 @@ def generate_leasing_ar(contract_code: str, customer_code: str, customer_name: s
             fee = existing.get("fee", 0.0)
             received_amount = existing.get("received_amount", 0.0)
             effective_amount = adjusted_amount if adjusted_amount is not None else base_amount
-            payment_status = _calculate_receivable_status(effective_amount, fee, received_amount)
+            payment_status = calculate_receivable_status(effective_amount, fee, received_amount, needs_invoice)
             accounting_period = accounting_period_for_date(current_end)
 
             cur.execute("""
@@ -89,7 +81,8 @@ def generate_leasing_ar(contract_code: str, customer_code: str, customer_name: s
 
 
 def generate_buyout_ar(contract_code: str, customer_code: str, customer_name: str,
-                       deal_date: date, deal_amount: float, conn):
+                       deal_date: date, deal_amount: float, conn,
+                       needs_invoice: bool = False):
     """產生買斷應收帳款，並保留既有的人工調整與收款資訊。"""
     with conn.cursor() as cur:
         cur.execute("""
@@ -105,7 +98,7 @@ def generate_buyout_ar(contract_code: str, customer_code: str, customer_name: st
         received_amount = _to_float(existing[2]) if existing else 0.0
         adjusted_amount = float(existing[3]) if existing and existing[3] is not None else None
         effective_amount = adjusted_amount if adjusted_amount is not None else deal_amount
-        payment_status = _calculate_receivable_status(effective_amount, fee, received_amount)
+        payment_status = calculate_receivable_status(effective_amount, fee, received_amount, needs_invoice)
         accounting_period = accounting_period_for_date(deal_date)
 
         cur.execute("DELETE FROM ar_buyout WHERE contract_code = %s", (contract_code,))

@@ -6,6 +6,12 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.accounting_period import accounting_period_for_date, apply_accounting_period_filter
+from app.billing import (
+    apply_invoice_tax,
+    calculate_receivable_status,
+    invoice_tax_amount,
+    remove_invoice_tax,
+)
 from app.database import get_connection, get_cursor
 
 router = APIRouter()
@@ -44,6 +50,10 @@ def _to_float(value) -> float:
     return float(value) if value is not None else 0.0
 
 
+def _round_money(value) -> float:
+    return round(_to_float(value), 2)
+
+
 def _serialize_date(value):
     if not value:
         return None
@@ -57,16 +67,6 @@ def _normalize_ar_type(ar_type: str) -> str:
     if value in {"買斷", "买断", "buyout"}:
         return "買斷"
     raise HTTPException(status_code=400, detail="應收帳款類型錯誤")
-
-
-def _calculate_receivable_status(amount: float, fee: float, received_amount: float) -> str:
-    total_due = max(_to_float(amount), 0.0) + max(_to_float(fee), 0.0)
-    received = max(_to_float(received_amount), 0.0)
-    if received >= total_due and total_due > 0:
-        return RECEIVABLE_PAID
-    if received > 0:
-        return RECEIVABLE_PARTIAL
-    return RECEIVABLE_UNPAID
 
 
 def _calculate_service_status(amount: float, paid_amount: float) -> str:
@@ -127,45 +127,46 @@ def get_receivables(
             where_parts = []
             params = []
             if contract_code:
-                where_parts.append("contract_code ILIKE %s")
+                where_parts.append("al.contract_code ILIKE %s")
                 params.append(f"%{contract_code}%")
             if customer_code:
-                where_parts.append("customer_code ILIKE %s")
+                where_parts.append("al.customer_code ILIKE %s")
                 params.append(f"%{customer_code}%")
             if customer_name:
-                where_parts.append("customer_name ILIKE %s")
+                where_parts.append("al.customer_name ILIKE %s")
                 params.append(f"%{customer_name}%")
             if from_date:
-                where_parts.append("start_date >= %s")
+                where_parts.append("al.start_date >= %s")
                 params.append(from_date)
             if to_date:
-                where_parts.append("start_date <= %s")
+                where_parts.append("al.start_date <= %s")
                 params.append(to_date)
             if payment_status:
-                where_parts.append("payment_status = %s")
+                where_parts.append("al.payment_status = %s")
                 params.append(payment_status)
-            apply_accounting_period_filter(where_parts, params, "accounting_period", accounting_period)
+            apply_accounting_period_filter(where_parts, params, "al.accounting_period", accounting_period)
 
             where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
             cur.execute(f"""
                 SELECT
-                    id,
+                    al.id,
                     '租賃' AS type,
-                    contract_code,
-                    customer_code,
-                    customer_name,
-                    start_date AS date,
-                    end_date,
-                    total_rent AS original_amount,
-                    adjusted_amount,
-                    COALESCE(adjusted_amount, total_rent) AS amount,
-                    fee,
-                    received_amount,
-                    payment_status,
-                    COALESCE(accounting_period, 'current') AS accounting_period
-                FROM ar_leasing
+                    al.contract_code,
+                    al.customer_code,
+                    al.customer_name,
+                    al.start_date AS date,
+                    al.end_date,
+                    al.total_rent AS untaxed_original_amount,
+                    al.adjusted_amount AS untaxed_adjusted_amount,
+                    al.fee,
+                    al.received_amount,
+                    al.payment_status,
+                    COALESCE(al.accounting_period, 'current') AS accounting_period,
+                    COALESCE(cl.needs_invoice, FALSE) AS needs_invoice
+                FROM ar_leasing al
+                LEFT JOIN contracts_leasing cl ON cl.contract_code = al.contract_code
                 {where_clause}
-                ORDER BY contract_code, start_date
+                ORDER BY al.contract_code, al.start_date
             """, tuple(params))
             result.extend(cur.fetchall())
 
@@ -173,52 +174,54 @@ def get_receivables(
             where_parts = []
             params = []
             if contract_code:
-                where_parts.append("contract_code ILIKE %s")
+                where_parts.append("ab.contract_code ILIKE %s")
                 params.append(f"%{contract_code}%")
             if customer_code:
-                where_parts.append("customer_code ILIKE %s")
+                where_parts.append("ab.customer_code ILIKE %s")
                 params.append(f"%{customer_code}%")
             if customer_name:
-                where_parts.append("customer_name ILIKE %s")
+                where_parts.append("ab.customer_name ILIKE %s")
                 params.append(f"%{customer_name}%")
             if from_date:
-                where_parts.append("deal_date >= %s")
+                where_parts.append("ab.deal_date >= %s")
                 params.append(from_date)
             if to_date:
-                where_parts.append("deal_date <= %s")
+                where_parts.append("ab.deal_date <= %s")
                 params.append(to_date)
             if payment_status:
-                where_parts.append("payment_status = %s")
+                where_parts.append("ab.payment_status = %s")
                 params.append(payment_status)
-            apply_accounting_period_filter(where_parts, params, "accounting_period", accounting_period)
+            apply_accounting_period_filter(where_parts, params, "ab.accounting_period", accounting_period)
 
             where_clause = " WHERE " + " AND ".join(where_parts) if where_parts else ""
             cur.execute(f"""
                 SELECT
-                    id,
+                    ab.id,
                     '買斷' AS type,
-                    contract_code,
-                    customer_code,
-                    customer_name,
-                    deal_date AS date,
+                    ab.contract_code,
+                    ab.customer_code,
+                    ab.customer_name,
+                    ab.deal_date AS date,
                     NULL AS end_date,
-                    total_amount AS original_amount,
-                    adjusted_amount,
-                    COALESCE(adjusted_amount, total_amount) AS amount,
-                    fee,
-                    received_amount,
-                    payment_status,
-                    COALESCE(accounting_period, 'current') AS accounting_period
-                FROM ar_buyout
+                    ab.total_amount AS untaxed_original_amount,
+                    ab.adjusted_amount AS untaxed_adjusted_amount,
+                    ab.fee,
+                    ab.received_amount,
+                    ab.payment_status,
+                    COALESCE(ab.accounting_period, 'current') AS accounting_period,
+                    COALESCE(cb.needs_invoice, FALSE) AS needs_invoice
+                FROM ar_buyout ab
+                LEFT JOIN contracts_buyout cb ON cb.contract_code = ab.contract_code
                 {where_clause}
-                ORDER BY contract_code, deal_date
+                ORDER BY ab.contract_code, ab.deal_date
             """, tuple(params))
             result.extend(cur.fetchall())
 
     columns = [
         "id", "type", "contract_code", "customer_code", "customer_name",
-        "date", "end_date", "original_amount", "adjusted_amount", "amount",
+        "date", "end_date", "untaxed_original_amount", "untaxed_adjusted_amount",
         "fee", "received_amount", "payment_status", "accounting_period",
+        "needs_invoice",
     ]
 
     serialized = []
@@ -226,9 +229,33 @@ def get_receivables(
         item = row_to_dict(row, columns)
         item["date"] = _serialize_date(item["date"])
         item["end_date"] = _serialize_date(item["end_date"])
-        item["original_amount"] = _to_float(item["original_amount"])
-        item["adjusted_amount"] = _to_float(item["adjusted_amount"]) if item["adjusted_amount"] is not None else None
-        item["amount"] = _to_float(item["amount"])
+        needs_invoice = bool(item["needs_invoice"])
+        untaxed_original_amount = _to_float(item["untaxed_original_amount"])
+        untaxed_adjusted_amount = (
+            _to_float(item["untaxed_adjusted_amount"])
+            if item["untaxed_adjusted_amount"] is not None
+            else None
+        )
+        untaxed_effective_amount = (
+            untaxed_adjusted_amount
+            if untaxed_adjusted_amount is not None
+            else untaxed_original_amount
+        )
+        item["needs_invoice"] = needs_invoice
+        item["untaxed_original_amount"] = _round_money(untaxed_original_amount)
+        item["untaxed_adjusted_amount"] = (
+            _round_money(untaxed_adjusted_amount)
+            if untaxed_adjusted_amount is not None
+            else None
+        )
+        item["original_amount"] = _round_money(apply_invoice_tax(untaxed_original_amount, needs_invoice))
+        item["adjusted_amount"] = (
+            _round_money(apply_invoice_tax(untaxed_adjusted_amount, needs_invoice))
+            if untaxed_adjusted_amount is not None
+            else None
+        )
+        item["amount"] = _round_money(apply_invoice_tax(untaxed_effective_amount, needs_invoice))
+        item["tax_amount"] = _round_money(invoice_tax_amount(untaxed_effective_amount, needs_invoice))
         item["fee"] = _to_float(item["fee"])
         item["received_amount"] = _to_float(item["received_amount"])
         serialized.append(item)
@@ -508,17 +535,28 @@ def update_receivable_amount(ar_type: str, ar_id: int, payload: AmountUpdate):
 
     normalized_type = _normalize_ar_type(ar_type)
     table_name = "ar_leasing" if normalized_type == "租賃" else "ar_buyout"
-    original_column = "total_rent" if normalized_type == "租賃" else "total_amount"
 
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT {original_column}, fee, received_amount
-                FROM {table_name}
-                WHERE id = %s
-                FOR UPDATE
-            """, (ar_id,))
+            if normalized_type == "租賃":
+                cur.execute("""
+                    SELECT ar.total_rent, ar.fee, ar.received_amount,
+                           COALESCE(cl.needs_invoice, FALSE) AS needs_invoice
+                    FROM ar_leasing ar
+                    LEFT JOIN contracts_leasing cl ON cl.contract_code = ar.contract_code
+                    WHERE ar.id = %s
+                    FOR UPDATE OF ar
+                """, (ar_id,))
+            else:
+                cur.execute("""
+                    SELECT ar.total_amount, ar.fee, ar.received_amount,
+                           COALESCE(cb.needs_invoice, FALSE) AS needs_invoice
+                    FROM ar_buyout ar
+                    LEFT JOIN contracts_buyout cb ON cb.contract_code = ar.contract_code
+                    WHERE ar.id = %s
+                    FOR UPDATE OF ar
+                """, (ar_id,))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="應收帳款不存在")
@@ -526,8 +564,20 @@ def update_receivable_amount(ar_type: str, ar_id: int, payload: AmountUpdate):
             original_amount = _to_float(row[0])
             fee = _to_float(row[1])
             received_amount = _to_float(row[2])
-            adjusted_amount = None if abs(payload.amount - original_amount) < 0.000001 else payload.amount
-            payment_status = _calculate_receivable_status(payload.amount, fee, received_amount)
+            needs_invoice = bool(row[3])
+            adjusted_untaxed_amount = _round_money(remove_invoice_tax(payload.amount, needs_invoice))
+            adjusted_amount = (
+                None
+                if abs(adjusted_untaxed_amount - original_amount) < 0.000001
+                else adjusted_untaxed_amount
+            )
+            effective_untaxed_amount = adjusted_amount if adjusted_amount is not None else original_amount
+            payment_status = calculate_receivable_status(
+                effective_untaxed_amount,
+                fee,
+                received_amount,
+                needs_invoice,
+            )
 
             cur.execute(f"""
                 UPDATE {table_name}
@@ -541,9 +591,17 @@ def update_receivable_amount(ar_type: str, ar_id: int, payload: AmountUpdate):
             return {
                 "id": ar_id,
                 "type": normalized_type,
-                "original_amount": original_amount,
-                "adjusted_amount": adjusted_amount,
-                "amount": payload.amount,
+                "original_amount": _round_money(apply_invoice_tax(original_amount, needs_invoice)),
+                "adjusted_amount": (
+                    _round_money(apply_invoice_tax(adjusted_amount, needs_invoice))
+                    if adjusted_amount is not None
+                    else None
+                ),
+                "amount": _round_money(apply_invoice_tax(effective_untaxed_amount, needs_invoice)),
+                "untaxed_original_amount": _round_money(original_amount),
+                "untaxed_adjusted_amount": _round_money(adjusted_amount) if adjusted_amount is not None else None,
+                "tax_amount": _round_money(invoice_tax_amount(effective_untaxed_amount, needs_invoice)),
+                "needs_invoice": needs_invoice,
                 "fee": fee,
                 "received_amount": received_amount,
                 "payment_status": payment_status,

@@ -121,8 +121,10 @@ function BankLedger() {
     return receivable.end_date ? `${receivable.date} ~ ${receivable.end_date}` : receivable.date
   }
 
-  const getReceivableOptionLabel = (item) =>
-    `${item.contract_code} - ${item.customer_name} (${item.type}) | 收款期間：${formatReceivablePeriod(item)}`
+  const getReceivableOptionLabel = (item) => {
+    const invoiceText = item.needs_invoice ? ` | 含稅 ${formatMoney(item.amount)} / 稅 ${formatMoney(item.tax_amount)}` : ''
+    return `${item.contract_code} - ${item.customer_name} (${item.type}) | 收款期間：${formatReceivablePeriod(item)}${invoiceText}`
+  }
 
   const getExpensePayeeName = (item) =>
     item?.payee_name || item?.vendor || '未指定付款對象'
@@ -511,6 +513,7 @@ function BankLedger() {
                                       </div>
                                       <div style={{ fontSize: 12, color: '#666' }}>
                                         收款期間：{formatReceivablePeriod(item)} | 未收 {formatMoney(item.unpaid_amount)}
+                                        {item.needs_invoice ? ` | 含稅 ${formatMoney(item.amount)} / 稅 ${formatMoney(item.tax_amount)}` : ''}
                                       </div>
                                     </div>
                                   )

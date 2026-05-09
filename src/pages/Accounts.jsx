@@ -269,9 +269,15 @@ function Accounts() {
 
   const renderAdjustedAmount = (_, record) => {
     const hasAdjustment = record.adjusted_amount !== null && record.adjusted_amount !== undefined
+    const untaxedAmount = record.untaxed_adjusted_amount ?? record.untaxed_original_amount
     return (
       <div>
         <div>{formatMoney(record.amount)}</div>
+        {record.needs_invoice && (
+          <div style={{ fontSize: 12, color: '#666' }}>
+            未稅 {formatMoney(untaxedAmount)} + 稅 {formatMoney(record.tax_amount)}
+          </div>
+        )}
         {hasAdjustment && (
           <div style={{ fontSize: 12, color: '#666' }}>
             原始 {formatMoney(record.original_amount)} <Tag color="orange">已調整</Tag>
@@ -381,6 +387,10 @@ function Accounts() {
             客戶名稱: item.customer_name,
             起日: item.date,
             迄日: item.end_date || '',
+            是否開票: item.needs_invoice ? '是' : '否',
+            未稅原始金額: item.untaxed_original_amount,
+            未稅最終金額: item.untaxed_adjusted_amount ?? item.untaxed_original_amount,
+            稅金: item.tax_amount,
             原始金額: item.original_amount,
             最終金額: item.amount,
             手續費: item.fee,
@@ -443,6 +453,14 @@ function Accounts() {
     { title: '起日', dataIndex: 'date', key: 'date', width: 110, sorter: dateSorter('date') },
     { title: '迄日', dataIndex: 'end_date', key: 'end_date', width: 110, sorter: dateSorter('end_date'), render: (value) => value || '-' },
     { title: '金額', key: 'amount', width: 180, sorter: numberSorter('amount'), render: renderAdjustedAmount },
+    {
+      title: '稅金',
+      dataIndex: 'tax_amount',
+      key: 'tax_amount',
+      width: 120,
+      sorter: numberSorter('tax_amount'),
+      render: (value, record) => record.needs_invoice ? formatMoney(value) : '-'
+    },
     { title: '手續費', dataIndex: 'fee', key: 'fee', width: 120, sorter: numberSorter('fee'), render: (value) => formatMoney(value) },
     { title: '已收金額', dataIndex: 'received_amount', key: 'received_amount', width: 120, sorter: numberSorter('received_amount'), render: (value) => formatMoney(value) },
     { title: '繳費狀況', dataIndex: 'payment_status', key: 'payment_status', width: 120, sorter: statusSorter('payment_status', RECEIVABLE_STATUS_ORDER) },
@@ -563,7 +581,7 @@ function Accounts() {
             children: (
               <>
                 <ReceivablesSearchForm onSearch={setReceivablesFilters} />
-                <Table columns={receivablesColumns} dataSource={receivablesData} rowKey="id" loading={loading} scroll={{ x: 1450 }} />
+                <Table columns={receivablesColumns} dataSource={receivablesData} rowKey="id" loading={loading} scroll={{ x: 1570 }} />
               </>
             )
           },
@@ -617,6 +635,11 @@ function Accounts() {
           <Form.Item label="原始金額">
             <Input value={editingAmountTarget ? formatMoney(editingAmountTarget.record.original_amount) : ''} disabled />
           </Form.Item>
+          {editingAmountTarget?.kind === 'receivable' && editingAmountTarget?.record?.needs_invoice && (
+            <div style={{ marginBottom: 12, color: '#666' }}>
+              這筆需要開發票，請輸入含稅後的最終金額；系統會換算未稅金額存入，帳款查詢會另列稅金。
+            </div>
+          )}
           <Form.Item
             label="最終金額"
             name="amount"

@@ -33,6 +33,7 @@ function Contracts() {
   const [serviceCompanies, setServiceCompanies] = useState([])
   const [loading, setLoading] = useState(false)
   const [form] = Form.useForm()
+  const [salesAmountTouched, setSalesAmountTouched] = useState(false)
 
   const loadOptions = async () => {
     try {
@@ -107,6 +108,11 @@ function Contracts() {
       } else {
         // 新增模式：重置表單
         form.resetFields()
+        form.setFieldsValue({
+          quantity: 1,
+          payment_cycle_months: 1,
+          needs_invoice: false
+        })
       }
     }
   }, [isModalOpen, editingRecord])
@@ -116,6 +122,23 @@ function Contracts() {
       return <Tag color="volcano">暫停</Tag>
     }
     return <Tag color="green">使用中</Tag>
+  }
+
+  const getDefaultLeasingSalesAmount = (monthlyRent) => {
+    const rent = Number(monthlyRent || 0)
+    return rent > 0 ? rent * 2 : null
+  }
+
+  const isDefaultLeasingSalesAmount = (salesAmount, monthlyRent) => {
+    if (salesAmount === null || salesAmount === undefined) return false
+    const defaultAmount = getDefaultLeasingSalesAmount(monthlyRent)
+    if (defaultAmount === null) return false
+    return Math.abs(Number(salesAmount) - defaultAmount) < 0.000001
+  }
+
+  const handleMonthlyRentChange = (value) => {
+    if (editingRecord?.type !== 'leasing' || salesAmountTouched) return
+    form.setFieldValue('sales_amount', getDefaultLeasingSalesAmount(value))
   }
 
   const leasingColumns = [
@@ -195,6 +218,7 @@ function Contracts() {
 
   const handleAdd = (type) => {
     setEditingRecord({ type })
+    setSalesAmountTouched(false)
     form.resetFields()
     form.setFieldsValue({
       quantity: 1,
@@ -206,6 +230,14 @@ function Contracts() {
 
   const handleEdit = (record, type) => {
     setEditingRecord({ ...record, type })
+    setSalesAmountTouched(
+      type !== 'leasing'
+        || (
+          record.sales_amount !== null
+          && record.sales_amount !== undefined
+          && !isDefaultLeasingSalesAmount(record.sales_amount, record.monthly_rent)
+        )
+    )
     form.resetFields()
     const formValues = type === 'leasing' 
       ? { ...record, start_date: dayjs(record.start_date), needs_invoice: record.needs_invoice ?? false }
@@ -217,6 +249,7 @@ function Contracts() {
   const handleCancel = () => {
     setIsModalOpen(false)
     setEditingRecord(null)
+    setSalesAmountTouched(false)
     form.resetFields()
   }
 
@@ -306,6 +339,7 @@ function Contracts() {
       }
       setIsModalOpen(false)
       setEditingRecord(null)
+      setSalesAmountTouched(false)
       form.resetFields()
     } catch (error) {
       if (error.errorFields) return
@@ -334,7 +368,7 @@ function Contracts() {
       </Space.Compact>
       <Space.Compact style={{ width: '100%' }}>
         <Form.Item label="月租金" name="monthly_rent" rules={[{ required: true, message: '請輸入月租金' }]} style={{ flex: 1 }}>
-          <InputNumber min={0} step={100} style={{ width: '100%' }} />
+          <InputNumber min={0} step={100} style={{ width: '100%' }} onChange={handleMonthlyRentChange} />
         </Form.Item>
         <Form.Item label="繳費週期(月)" name="payment_cycle_months" rules={[{ required: true, message: '請輸入繳費週期' }]} style={{ flex: 1 }}>
           <InputNumber min={1} style={{ width: '100%' }} />
@@ -347,7 +381,7 @@ function Contracts() {
         label="是否需要開發票" 
         name="needs_invoice" 
         valuePropName="checked"
-        tooltip="勾選後，月租金將自動 × 1.05（含稅），金額會直接存入資料庫"
+        tooltip="勾選後，月租金仍以未稅保存；帳款查詢與對帳會另計 5% 稅金"
       >
         <Switch checkedChildren="要開" unCheckedChildren="不開" />
       </Form.Item>
@@ -359,7 +393,7 @@ function Contracts() {
           <Select options={salesCompanies} placeholder="不指定" allowClear />
         </Form.Item>
         <Form.Item label="業務金額" name="sales_amount" style={{ flex: 1 }}>
-          <InputNumber min={0} step={100} style={{ width: '100%' }} />
+          <InputNumber min={0} step={100} style={{ width: '100%' }} onChange={() => setSalesAmountTouched(true)} />
         </Form.Item>
         <Form.Item label="維護公司" name="service_company_code" style={{ flex: 1 }}>
           <Select options={serviceCompanies} placeholder="不指定" allowClear />
@@ -391,7 +425,7 @@ function Contracts() {
         label="是否需要開發票" 
         name="needs_invoice" 
         valuePropName="checked"
-        tooltip="勾選後，成交金額將自動 × 1.05（含稅），金額會直接存入資料庫"
+        tooltip="勾選後，成交金額仍以未稅保存；帳款查詢與對帳會另計 5% 稅金"
       >
         <Switch checkedChildren="要開" unCheckedChildren="不開" />
       </Form.Item>

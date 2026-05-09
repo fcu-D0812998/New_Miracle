@@ -172,8 +172,6 @@ def create_leasing_contract(contract: ContractLeasingCreate):
             customer_name = get_customer_name(contract.customer_code, conn)
             
             monthly_rent = contract.monthly_rent
-            if contract.needs_invoice and monthly_rent:
-                monthly_rent = monthly_rent * 1.05
             
             cur.execute("""
                 INSERT INTO contracts_leasing
@@ -195,7 +193,8 @@ def create_leasing_contract(contract: ContractLeasingCreate):
                 generate_leasing_ar(
                     contract.contract_code, contract.customer_code, customer_name,
                     contract.start_date, monthly_rent,
-                    contract.payment_cycle_months, contract.contract_months, conn
+                    contract.payment_cycle_months, contract.contract_months, conn,
+                    needs_invoice=contract.needs_invoice
                 )
             
             # 生成服務費用
@@ -233,8 +232,6 @@ def create_buyout_contract(contract: ContractBuyoutCreate):
             customer_name = get_customer_name(contract.customer_code, conn)
             
             deal_amount = contract.deal_amount
-            if contract.needs_invoice and deal_amount:
-                deal_amount = deal_amount * 1.05
             
             cur.execute("""
                 INSERT INTO contracts_buyout
@@ -252,7 +249,8 @@ def create_buyout_contract(contract: ContractBuyoutCreate):
             if deal_amount:
                 generate_buyout_ar(
                     contract.contract_code, contract.customer_code, customer_name,
-                    contract.deal_date, deal_amount, conn
+                    contract.deal_date, deal_amount, conn,
+                    needs_invoice=contract.needs_invoice
                 )
             
             # 生成服務費用
@@ -300,8 +298,6 @@ def update_leasing_contract(contract_code: str, contract: ContractLeasingCreate)
                     raise HTTPException(status_code=400, detail="合約編號已存在")
             
             monthly_rent = contract.monthly_rent
-            if contract.needs_invoice and monthly_rent:
-                monthly_rent = monthly_rent * 1.05
             
             should_generate = bool(monthly_rent and contract.contract_months)
 
@@ -338,7 +334,8 @@ def update_leasing_contract(contract_code: str, contract: ContractLeasingCreate)
                 generate_leasing_ar(
                     new_contract_code, contract.customer_code, customer_name,
                     contract.start_date, monthly_rent,
-                    contract.payment_cycle_months, contract.contract_months, conn
+                    contract.payment_cycle_months, contract.contract_months, conn,
+                    needs_invoice=contract.needs_invoice
                 )
             elif code_changed:
                 cur.execute(
@@ -395,8 +392,6 @@ def update_buyout_contract(contract_code: str, contract: ContractBuyoutCreate):
                     raise HTTPException(status_code=400, detail="合約編號已存在")
             
             deal_amount = contract.deal_amount
-            if contract.needs_invoice and deal_amount:
-                deal_amount = deal_amount * 1.05
             
             should_generate = bool(deal_amount)
 
@@ -428,7 +423,8 @@ def update_buyout_contract(contract_code: str, contract: ContractBuyoutCreate):
                 cur.execute("DELETE FROM ar_buyout WHERE contract_code IN (%s, %s)", (contract_code, new_contract_code))
                 generate_buyout_ar(
                     new_contract_code, contract.customer_code, customer_name,
-                    contract.deal_date, deal_amount, conn
+                    contract.deal_date, deal_amount, conn,
+                    needs_invoice=contract.needs_invoice
                 )
             elif code_changed:
                 cur.execute(
@@ -532,7 +528,8 @@ def resume_leasing_contract(contract_code: str, payload: ContractResume):
                     monthly_rent,
                     row[8],
                     contract_months,
-                    conn
+                    conn,
+                    needs_invoice=bool(row[18])
                 )
             generate_service_expenses_for_leasing(
                 contract_code,
@@ -623,7 +620,8 @@ def resume_buyout_contract(contract_code: str, payload: ContractResume):
                     row[3],
                     resume_date,
                     deal_amount,
-                    conn
+                    conn,
+                    needs_invoice=bool(row[13])
                 )
             generate_service_expenses_for_buyout(
                 contract_code,
