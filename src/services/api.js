@@ -123,6 +123,12 @@ export const getBankLedger = (fromDate, toDate, search, accountingPeriod = 'curr
 export const getBankLedgerPayers = (search) =>
   api.get('/bank-ledger/payers', { params: { search } }).then(res => res.data)
 
+export const previewBankLedgerOcr = (images) =>
+  api.post('/bank-ledger/ocr/preview', { images }).then(res => res.data)
+
+export const importBankLedgerOcrRows = (rows) =>
+  api.post('/bank-ledger/ocr/import', { rows }).then(res => res.data)
+
 export const createBankLedger = (data) => 
   api.post('/bank-ledger', data).then(res => res.data)
 

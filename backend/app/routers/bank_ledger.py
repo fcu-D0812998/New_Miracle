@@ -1,4 +1,11 @@
 """銀行帳本與對帳 API。"""
+import base64
+import json
+import os
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import date
 from typing import Dict, List, Optional
 
@@ -54,6 +61,28 @@ class ReconcileRequest(BaseModel):
     auto_update: bool = True
 
 
+class OcrImageInput(BaseModel):
+    filename: str
+    content_base64: str
+    mime_type: Optional[str] = None
+
+
+class OcrPreviewRequest(BaseModel):
+    images: List[OcrImageInput]
+
+
+class OcrDraftRow(BaseModel):
+    txn_date: date
+    payer: Optional[str] = None
+    expense: float = 0
+    income: float = 0
+    note: Optional[str] = None
+
+
+class OcrImportRequest(BaseModel):
+    rows: List[OcrDraftRow]
+
+
 class BankLedgerCreate(BankLedgerBase):
     pass
 
@@ -104,6 +133,305 @@ def _calculate_service_status(amount: float, paid_amount: float) -> str:
 
 def _service_status_to_display(status: Optional[str]) -> Optional[str]:
     return PAYABLE_STATUS_MAP.get(status, status)
+
+
+def _strip_base64_prefix(value: str) -> str:
+    content = (value or "").strip()
+    if "," in content and content.lower().startswith("data:"):
+        return content.split(",", 1)[1]
+    return content
+
+
+def _safe_decode_base64(value: str, filename: str) -> str:
+    content = _strip_base64_prefix(value)
+    try:
+        base64.b64decode(content, validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"{filename} 圖片內容不是有效的 base64") from exc
+    return content
+
+
+def _call_google_vision_ocr(images: List[OcrImageInput]) -> List[dict]:
+    api_key = os.getenv("GOOGLE_VISION_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="尚未設定 GOOGLE_VISION_API_KEY")
+    if not images:
+        raise HTTPException(status_code=400, detail="請至少上傳一張照片")
+    if len(images) > 5:
+        raise HTTPException(status_code=400, detail="一次最多辨識 5 張照片")
+
+    requests = []
+    for image in images:
+        requests.append({
+            "image": {"content": _safe_decode_base64(image.content_base64, image.filename)},
+            "features": [{"type": "DOCUMENT_TEXT_DETECTION"}],
+            "imageContext": {"languageHints": ["zh-TW", "en"]},
+        })
+
+    url = "https://vision.googleapis.com/v1/images:annotate?key=" + urllib.parse.quote(api_key)
+    request = urllib.request.Request(
+        url,
+        data=json.dumps({"requests": requests}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=502, detail=f"Google Vision OCR 失敗：{error_body}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Google Vision OCR 連線失敗：{exc}") from exc
+
+    responses = payload.get("responses", [])
+    for index, response_item in enumerate(responses):
+        if response_item.get("error"):
+            message = response_item["error"].get("message", "未知錯誤")
+            filename = images[index].filename if index < len(images) else "圖片"
+            raise HTTPException(status_code=502, detail=f"{filename} OCR 失敗：{message}")
+    return responses
+
+
+def _parse_roc_or_gregorian_date(value: str) -> Optional[date]:
+    digits = re.sub(r"\D", "", value or "")
+    candidates = []
+    if len(digits) >= 7:
+        candidates.append(digits[:7])
+    if len(digits) >= 8:
+        candidates.append(digits[:8])
+
+    for candidate in candidates:
+        try:
+            if len(candidate) == 7:
+                year = int(candidate[:3]) + 1911
+                month = int(candidate[3:5])
+                day = int(candidate[5:7])
+            else:
+                year = int(candidate[:4])
+                month = int(candidate[4:6])
+                day = int(candidate[6:8])
+            if 2000 <= year <= 2100:
+                return date(year, month, day)
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_money(value: str) -> Optional[float]:
+    normalized = (value or "").replace(",", "").replace("$", "").replace("＄", "")
+    normalized = re.sub(r"[^\d.]", "", normalized)
+    if not normalized:
+        return None
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
+
+
+def _money_candidates(text: str) -> List[float]:
+    pattern = r"[$＄]?\s*\d{1,3}(?:,\d{3})+(?:\.\d+)?|[$＄]?\s*\d+(?:\.\d+)?"
+    result = []
+    for match in re.findall(pattern, text or ""):
+        amount = _parse_money(match)
+        if amount is not None and amount > 0:
+            result.append(amount)
+    return result
+
+
+def _annotation_center(annotation: dict) -> tuple[float, float]:
+    vertices = annotation.get("boundingPoly", {}).get("vertices", [])
+    xs = [vertex.get("x", 0) for vertex in vertices]
+    ys = [vertex.get("y", 0) for vertex in vertices]
+    return (sum(xs) / len(xs) if xs else 0.0, sum(ys) / len(ys) if ys else 0.0)
+
+
+def _annotation_height(annotation: dict) -> float:
+    vertices = annotation.get("boundingPoly", {}).get("vertices", [])
+    ys = [vertex.get("y", 0) for vertex in vertices]
+    return (max(ys) - min(ys)) if ys else 20.0
+
+
+def _extract_words(response_item: dict) -> List[dict]:
+    annotations = response_item.get("textAnnotations", [])[1:]
+    words = []
+    max_x = 1.0
+    for annotation in annotations:
+        text = annotation.get("description", "").strip()
+        if not text:
+            continue
+        center_x, center_y = _annotation_center(annotation)
+        height = _annotation_height(annotation)
+        max_x = max(max_x, center_x)
+        words.append({"text": text, "x": center_x, "y": center_y, "height": height})
+
+    if not words:
+        return []
+
+    image_width = max(word["x"] for word in words) or max_x
+    for word in words:
+        word["nx"] = word["x"] / image_width
+    return words
+
+
+def _cluster_words_by_row(words: List[dict]) -> List[List[dict]]:
+    if not words:
+        return []
+    heights = sorted(word["height"] for word in words if word["height"] > 0)
+    median_height = heights[len(heights) // 2] if heights else 20.0
+    threshold = max(12.0, median_height * 0.75)
+    rows: List[List[dict]] = []
+
+    for word in sorted(words, key=lambda item: item["y"]):
+        matched_row = None
+        for row in rows:
+            row_y = sum(item["y"] for item in row) / len(row)
+            if abs(word["y"] - row_y) <= threshold:
+                matched_row = row
+                break
+        if matched_row is None:
+            rows.append([word])
+        else:
+            matched_row.append(word)
+
+    for row in rows:
+        row.sort(key=lambda item: item["x"])
+    return rows
+
+
+def _column_centers(words: List[dict]) -> dict:
+    defaults = {"withdrawal": 0.58, "deposit": 0.70, "balance": 0.88}
+    aliases = {
+        "withdrawal": {"支出", "WITHDRAWAL", "WITHDRAW", "提款"},
+        "deposit": {"存入", "DEPOSIT", "存款"},
+        "balance": {"餘額", "余额", "BALANCE"},
+    }
+    centers = {}
+    for key, keywords in aliases.items():
+        matched = [
+            word["nx"]
+            for word in words
+            if any(keyword.lower() in word["text"].lower() for keyword in keywords)
+        ]
+        if matched:
+            centers[key] = sum(matched) / len(matched)
+    return {**defaults, **centers}
+
+
+def _assign_amount_column(word: dict, centers: dict) -> str:
+    candidates = {
+        "withdrawal": abs(word["nx"] - centers["withdrawal"]),
+        "deposit": abs(word["nx"] - centers["deposit"]),
+        "balance": abs(word["nx"] - centers["balance"]),
+    }
+    return min(candidates, key=candidates.get)
+
+
+def _row_text(row: List[dict]) -> str:
+    return " ".join(word["text"] for word in sorted(row, key=lambda item: item["x"])).strip()
+
+
+def _draft_row(row_date: date, payer: str, expense: float, income: float,
+               note: str, source_text: str, filename: str) -> dict:
+    return {
+        "key": f"{filename}-{row_date.isoformat()}-{abs(hash(source_text))}",
+        "txn_date": row_date.isoformat(),
+        "payer": payer or None,
+        "expense": round(expense or 0, 2),
+        "income": round(income or 0, 2),
+        "note": note or None,
+        "source_text": source_text,
+        "source_file": filename,
+    }
+
+
+def _parse_rows_from_words(response_item: dict, filename: str) -> List[dict]:
+    words = _extract_words(response_item)
+    centers = _column_centers(words)
+    rows = _cluster_words_by_row(words)
+    parsed_rows: List[dict] = []
+    last_row = None
+
+    for row in rows:
+        source_text = _row_text(row)
+        row_date = None
+        for word in row:
+            candidate_date = _parse_roc_or_gregorian_date(word["text"])
+            if candidate_date and word["nx"] < 0.35:
+                row_date = candidate_date
+                break
+
+        if not row_date:
+            if last_row and ("附言" in source_text or "備註" in source_text):
+                extra_note = re.sub(r"^(附言|備註)[:：]?", "", source_text).strip()
+                if extra_note:
+                    last_row["note"] = " ".join(filter(None, [last_row.get("note"), extra_note]))
+            continue
+
+        withdrawal = 0.0
+        deposit = 0.0
+        memo_words = []
+        for word in row:
+            if _parse_roc_or_gregorian_date(word["text"]) and word["nx"] < 0.35:
+                continue
+            amount = _parse_money(word["text"])
+            if amount is not None and word["nx"] >= 0.45:
+                column = _assign_amount_column(word, centers)
+                if column == "withdrawal":
+                    withdrawal = amount
+                elif column == "deposit":
+                    deposit = amount
+                continue
+            if word["nx"] < centers["balance"] - 0.06:
+                memo_words.append(word["text"])
+
+        memo = " ".join(memo_words).strip()
+        payer = memo.split()[0] if memo else ""
+        draft = _draft_row(row_date, payer, withdrawal, deposit, memo, source_text, filename)
+        parsed_rows.append(draft)
+        last_row = draft
+
+    return parsed_rows
+
+
+def _parse_rows_from_text(raw_text: str, filename: str) -> List[dict]:
+    parsed_rows = []
+    last_row = None
+    for line in (raw_text or "").splitlines():
+        source_text = line.strip()
+        if not source_text:
+            continue
+        date_match = re.search(r"\b\d{7,8}\b", source_text)
+        row_date = _parse_roc_or_gregorian_date(date_match.group(0)) if date_match else None
+        if not row_date:
+            if last_row and ("附言" in source_text or "備註" in source_text):
+                extra_note = re.sub(r"^(附言|備註)[:：]?", "", source_text).strip()
+                if extra_note:
+                    last_row["note"] = " ".join(filter(None, [last_row.get("note"), extra_note]))
+            continue
+
+        amounts = _money_candidates(source_text)
+        transaction_amount = amounts[-2] if len(amounts) >= 2 else (amounts[0] if amounts else 0.0)
+        expense = transaction_amount if "手續費" in source_text else 0.0
+        income = 0.0 if expense else transaction_amount
+        memo = re.sub(r"\b\d{7,8}\b", "", source_text)
+        memo = re.sub(r"[$＄]?\s*\d{1,3}(?:,\d{3})+(?:\.\d+)?", "", memo).strip()
+        payer = memo.split()[0] if memo else ""
+        draft = _draft_row(row_date, payer, expense, income, memo, source_text, filename)
+        parsed_rows.append(draft)
+        last_row = draft
+    return parsed_rows
+
+
+def _parse_ocr_response(response_item: dict, filename: str) -> dict:
+    raw_text = (
+        response_item.get("fullTextAnnotation", {}).get("text")
+        or (response_item.get("textAnnotations") or [{}])[0].get("description", "")
+    )
+    rows = _parse_rows_from_words(response_item, filename)
+    if not rows:
+        rows = _parse_rows_from_text(raw_text, filename)
+    return {"filename": filename, "raw_text": raw_text, "rows": rows}
 
 
 def _legacy_reconciled_amount(income: float, expense: float, is_reconciled: bool,
@@ -364,6 +692,76 @@ def get_bank_ledger_payers(
             ORDER BY payer_name
         """, tuple(params))
         return [row[0] for row in cur.fetchall()]
+
+
+@router.post("/ocr/preview", response_model=dict)
+def preview_bank_ledger_ocr(payload: OcrPreviewRequest):
+    responses = _call_google_vision_ocr(payload.images)
+    parsed_images = []
+    draft_rows = []
+
+    for image, response_item in zip(payload.images, responses):
+        parsed = _parse_ocr_response(response_item, image.filename)
+        parsed_images.append({
+            "filename": parsed["filename"],
+            "raw_text": parsed["raw_text"],
+            "row_count": len(parsed["rows"]),
+        })
+        draft_rows.extend(parsed["rows"])
+
+    return {
+        "images": parsed_images,
+        "rows": draft_rows,
+        "row_count": len(draft_rows),
+        "warnings": [
+            "OCR 結果可能受照片角度、陰影與手寫字影響，請逐筆確認後再匯入。"
+        ],
+    }
+
+
+@router.post("/ocr/import", response_model=dict, status_code=201)
+def import_bank_ledger_ocr_rows(payload: OcrImportRequest):
+    if not payload.rows:
+        raise HTTPException(status_code=400, detail="沒有可匯入的銀行帳本資料")
+
+    conn = get_connection()
+    inserted_ids = []
+    try:
+        with conn.cursor() as cur:
+            for row in payload.rows:
+                expense = max(_to_float(row.expense), 0.0)
+                income = max(_to_float(row.income), 0.0)
+                if expense <= 0 and income <= 0:
+                    raise HTTPException(status_code=400, detail="每筆資料至少需有收入或支出金額")
+
+                cur.execute("""
+                    INSERT INTO bank_ledger
+                    (txn_date, payer, expense, income, note, is_reconciled,
+                     reconciled_ar_id, reconciled_ar_type,
+                     reconciled_payable_contract_code, reconciled_payable_type,
+                     reconciled_service_expense_id, reconciled_fee_amount, accounting_period)
+                    VALUES (%s, %s, %s, %s, %s, FALSE, NULL, NULL, NULL, NULL, NULL, 0, %s)
+                    RETURNING id
+                """, (
+                    row.txn_date,
+                    (row.payer or "").strip() or None,
+                    expense,
+                    income,
+                    (row.note or "").strip() or None,
+                    accounting_period_for_date(row.txn_date),
+                ))
+                inserted_ids.append(cur.fetchone()[0])
+
+            conn.commit()
+            return {"inserted_count": len(inserted_ids), "ids": inserted_ids}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
 
 
 @router.post("", response_model=dict, status_code=201)

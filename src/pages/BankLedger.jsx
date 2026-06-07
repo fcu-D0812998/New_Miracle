@@ -14,7 +14,9 @@ import {
   Select,
   Tag,
   Divider,
-  AutoComplete
+  AutoComplete,
+  Upload,
+  Alert
 } from 'antd'
 import {
   PlusOutlined,
@@ -24,12 +26,15 @@ import {
   SearchOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  MinusCircleOutlined
+  MinusCircleOutlined,
+  UploadOutlined
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   getBankLedger,
   getBankLedgerPayers,
+  previewBankLedgerOcr,
+  importBankLedgerOcrRows,
   createBankLedger,
   updateBankLedger,
   deleteBankLedger,
@@ -51,12 +56,20 @@ const ACCOUNTING_PERIOD_OPTIONS = [
 const formatMoney = (value) => `NT$ ${Number(value || 0).toLocaleString()}`
 const normalizeSearchText = (value) => String(value || '').trim().toLowerCase()
 
+const fileToBase64 = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onload = () => resolve(reader.result)
+  reader.onerror = reject
+  reader.readAsDataURL(file)
+})
+
 function BankLedger() {
   const [searchText, setSearchText] = useState('')
   const [dateRange, setDateRange] = useState(null)
   const [accountingPeriod, setAccountingPeriod] = useState('current')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isReconcileModalOpen, setIsReconcileModalOpen] = useState(false)
+  const [isOcrModalOpen, setIsOcrModalOpen] = useState(false)
   const [editingRecord, setEditingRecord] = useState(null)
   const [reconcilingRecord, setReconcilingRecord] = useState(null)
   const [dataSource, setDataSource] = useState([])
@@ -65,6 +78,12 @@ function BankLedger() {
   const [reconcilableReceivables, setReconcilableReceivables] = useState([])
   const [reconcilableServiceExpenses, setReconcilableServiceExpenses] = useState([])
   const [payerOptions, setPayerOptions] = useState([])
+  const [ocrFiles, setOcrFiles] = useState([])
+  const [ocrRows, setOcrRows] = useState([])
+  const [ocrImages, setOcrImages] = useState([])
+  const [ocrWarnings, setOcrWarnings] = useState([])
+  const [ocrLoading, setOcrLoading] = useState(false)
+  const [ocrImporting, setOcrImporting] = useState(false)
   const [form] = Form.useForm()
   const [reconcileForm] = Form.useForm()
   const watchedLines = Form.useWatch('lines', reconcileForm) || []
@@ -268,6 +287,22 @@ function BankLedger() {
     setIsModalOpen(true)
   }
 
+  const openOcrModal = () => {
+    setOcrFiles([])
+    setOcrRows([])
+    setOcrImages([])
+    setOcrWarnings([])
+    setIsOcrModalOpen(true)
+  }
+
+  const closeOcrModal = () => {
+    setIsOcrModalOpen(false)
+    setOcrFiles([])
+    setOcrRows([])
+    setOcrImages([])
+    setOcrWarnings([])
+  }
+
   const handleEdit = (record) => {
     setEditingRecord(record)
     setIsModalOpen(true)
@@ -312,9 +347,173 @@ function BankLedger() {
     }
   }
 
+  const handleOcrPreview = async () => {
+    if (!ocrFiles.length) {
+      message.warning('請先選擇帳本照片')
+      return
+    }
+
+    setOcrLoading(true)
+    try {
+      const images = await Promise.all(ocrFiles.map(async (fileItem) => {
+        const file = fileItem.originFileObj || fileItem
+        return {
+          filename: file.name || fileItem.name,
+          mime_type: file.type || fileItem.type,
+          content_base64: await fileToBase64(file)
+        }
+      }))
+      const result = await previewBankLedgerOcr(images)
+      setOcrImages(result.images || [])
+      setOcrWarnings(result.warnings || [])
+      setOcrRows((result.rows || []).map((row, index) => ({
+        ...row,
+        key: row.key || `ocr-${index}`
+      })))
+      message.success(`辨識完成，共產生 ${result.row_count || 0} 筆待確認資料`)
+    } catch (error) {
+      message.error('OCR 辨識失敗：' + (error.response?.data?.detail || error.message))
+    } finally {
+      setOcrLoading(false)
+    }
+  }
+
+  const updateOcrRow = (key, field, value) => {
+    setOcrRows((rows) => rows.map((row) => (
+      row.key === key ? { ...row, [field]: value } : row
+    )))
+  }
+
+  const deleteOcrRow = (key) => {
+    setOcrRows((rows) => rows.filter((row) => row.key !== key))
+  }
+
+  const handleOcrImport = async () => {
+    const rows = ocrRows.map((row) => ({
+      txn_date: row.txn_date,
+      payer: row.payer || null,
+      expense: Number(row.expense || 0),
+      income: Number(row.income || 0),
+      note: row.note || null
+    }))
+
+    const invalidRow = rows.find((row) => (
+      !row.txn_date
+      || !dayjs(row.txn_date).isValid()
+      || ((row.expense || 0) <= 0 && (row.income || 0) <= 0)
+    ))
+    if (invalidRow) {
+      message.warning('請確認每筆資料都有日期，且至少有收入或支出金額')
+      return
+    }
+
+    setOcrImporting(true)
+    try {
+      const result = await importBankLedgerOcrRows(rows)
+      message.success(`匯入成功，共新增 ${result.inserted_count || rows.length} 筆銀行帳本資料`)
+      closeOcrModal()
+      await loadData()
+      await loadPayerOptions()
+    } catch (error) {
+      message.error('匯入失敗：' + (error.response?.data?.detail || error.message))
+    } finally {
+      setOcrImporting(false)
+    }
+  }
+
   const handleExport = () => {
     message.info('匯出功能待實作')
   }
+
+  const ocrColumns = [
+    {
+      title: '日期',
+      dataIndex: 'txn_date',
+      key: 'txn_date',
+      width: 150,
+      render: (value, record) => (
+        <DatePicker
+          value={value ? dayjs(value) : null}
+          onChange={(_, dateString) => updateOcrRow(record.key, 'txn_date', dateString)}
+          style={{ width: '100%' }}
+        />
+      )
+    },
+    {
+      title: '對象／匯款人',
+      dataIndex: 'payer',
+      key: 'payer',
+      width: 160,
+      render: (value, record) => (
+        <Input
+          value={value}
+          onChange={(event) => updateOcrRow(record.key, 'payer', event.target.value)}
+        />
+      )
+    },
+    {
+      title: '支出',
+      dataIndex: 'expense',
+      key: 'expense',
+      width: 130,
+      render: (value, record) => (
+        <InputNumber
+          min={0}
+          value={value}
+          onChange={(nextValue) => updateOcrRow(record.key, 'expense', nextValue || 0)}
+          style={{ width: '100%' }}
+        />
+      )
+    },
+    {
+      title: '收入',
+      dataIndex: 'income',
+      key: 'income',
+      width: 130,
+      render: (value, record) => (
+        <InputNumber
+          min={0}
+          value={value}
+          onChange={(nextValue) => updateOcrRow(record.key, 'income', nextValue || 0)}
+          style={{ width: '100%' }}
+        />
+      )
+    },
+    {
+      title: '備註',
+      dataIndex: 'note',
+      key: 'note',
+      width: 220,
+      render: (value, record) => (
+        <Input
+          value={value}
+          onChange={(event) => updateOcrRow(record.key, 'note', event.target.value)}
+        />
+      )
+    },
+    {
+      title: 'OCR 原文',
+      dataIndex: 'source_text',
+      key: 'source_text',
+      width: 260,
+      render: (value) => (
+        <div style={{ fontSize: 12, color: '#666', whiteSpace: 'normal' }}>
+          {value || '-'}
+        </div>
+      )
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 80,
+      fixed: 'right',
+      render: (_, record) => (
+        <Button type="link" danger onClick={() => deleteOcrRow(record.key)}>
+          刪除
+        </Button>
+      )
+    }
+  ]
 
   const handleReconcile = async (record) => {
     setReconcilingRecord(record)
@@ -424,6 +623,7 @@ function BankLedger() {
         </Space>
         <Space>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增資料</Button>
+          <Button icon={<UploadOutlined />} onClick={openOcrModal}>照片匯入</Button>
           <Button icon={<DownloadOutlined />} onClick={handleExport}>匯出 Excel</Button>
         </Space>
       </Space>
@@ -599,6 +799,67 @@ function BankLedger() {
             )}
           </Form.List>
         </Form>
+      </Modal>
+
+      <Modal
+        title="照片 OCR 匯入銀行帳本"
+        open={isOcrModalOpen}
+        onCancel={closeOcrModal}
+        width={1180}
+        destroyOnClose
+        footer={[
+          <Button key="cancel" onClick={closeOcrModal}>取消</Button>,
+          <Button key="preview" icon={<UploadOutlined />} loading={ocrLoading} onClick={handleOcrPreview}>
+            開始辨識
+          </Button>,
+          <Button
+            key="import"
+            type="primary"
+            loading={ocrImporting}
+            disabled={!ocrRows.length}
+            onClick={handleOcrImport}
+          >
+            確認匯入
+          </Button>
+        ]}
+      >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="請先辨識照片，再逐筆確認日期、對象、收入、支出與備註。確認匯入前不會寫入銀行帳本。"
+          />
+          <Upload
+            accept="image/*"
+            multiple
+            maxCount={5}
+            fileList={ocrFiles}
+            beforeUpload={() => false}
+            onChange={({ fileList }) => setOcrFiles(fileList)}
+            onRemove={(file) => {
+              setOcrFiles((files) => files.filter((item) => item.uid !== file.uid))
+              return true
+            }}
+          >
+            <Button icon={<UploadOutlined />}>選擇帳本照片</Button>
+          </Upload>
+          {ocrWarnings.map((warning) => (
+            <Alert key={warning} type="warning" showIcon message={warning} />
+          ))}
+          {!!ocrImages.length && (
+            <div style={{ fontSize: 13, color: '#666' }}>
+              {ocrImages.map((image) => `${image.filename}：${image.row_count} 筆`).join(' / ')}
+            </div>
+          )}
+          <Table
+            columns={ocrColumns}
+            dataSource={ocrRows}
+            rowKey="key"
+            pagination={{ pageSize: 8 }}
+            scroll={{ x: 1130 }}
+            locale={{ emptyText: '尚未產生待匯入資料' }}
+          />
+        </Space>
       </Modal>
     </div>
   )
