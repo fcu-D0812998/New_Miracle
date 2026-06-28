@@ -36,7 +36,7 @@ function MainLayout() {
           fontSize: 18,
           fontWeight: 'bold'
         }}>
-          📊 記帳平台
+          記帳平台
         </div>
         <Menu
           theme="dark"

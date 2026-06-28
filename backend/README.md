@@ -62,6 +62,6 @@ FastAPI 後端，對應前端 React 應用。
 
 ## 安全注意事項
 
-- ⚠️ `.env` 檔案包含敏感資訊，**不要**推送到 Git
-- ✅ `.env.example` 是範本檔案，可以安全推送
-- ✅ Render 部署時，在 Dashboard 手動設定環境變數
+- `.env` 檔案包含敏感資訊，**不要**推送到 Git
+- `.env.example` 是範本檔案，可以安全推送
+- Render 部署時，在 Dashboard 手動設定環境變數

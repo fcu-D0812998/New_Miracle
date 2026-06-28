@@ -66,7 +66,7 @@ function Companies() {
       key: 'is_sales', 
       width: 100,
       sorter: booleanSorter('is_sales'),
-      render: (val) => val ? '✓' : '-'
+      render: (val) => val ? '是' : '-'
     },
     { 
       title: '維護公司', 
@@ -74,7 +74,7 @@ function Companies() {
       key: 'is_service', 
       width: 100,
       sorter: booleanSorter('is_service'),
-      render: (val) => val ? '✓' : '-'
+      render: (val) => val ? '是' : '-'
     },
     {
       title: '操作',
@@ -156,7 +156,7 @@ function Companies() {
     <div style={{ padding: 24 }}>
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Input
-          placeholder="🔍 搜尋公司（可搜尋任何欄位）"
+          placeholder="搜尋公司（可搜尋任何欄位）"
           prefix={<SearchOutlined />}
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}

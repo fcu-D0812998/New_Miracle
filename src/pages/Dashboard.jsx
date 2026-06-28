@@ -125,7 +125,7 @@ function Dashboard() {
 
   return (
     <div style={{ padding: 24 }}>
-      <h1 style={{ marginBottom: 24 }}>📊 首頁</h1>
+      <h1 style={{ marginBottom: 24 }}>首頁</h1>
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} md={6}>
           <Card>

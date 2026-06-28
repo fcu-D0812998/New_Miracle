@@ -489,7 +489,7 @@ function Contracts() {
             style={{ width: 110 }}
           />
           <Input
-            placeholder="🔍 搜尋合約（可搜尋任何欄位）"
+            placeholder="搜尋合約（可搜尋任何欄位）"
             prefix={<SearchOutlined />}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}

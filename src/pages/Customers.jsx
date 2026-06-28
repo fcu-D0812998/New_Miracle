@@ -148,7 +148,7 @@ function Customers() {
     <div style={{ padding: 24 }}>
       <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
         <Input
-          placeholder="🔍 搜尋客戶（可搜尋任何欄位）"
+          placeholder="搜尋客戶（可搜尋任何欄位）"
           prefix={<SearchOutlined />}
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
